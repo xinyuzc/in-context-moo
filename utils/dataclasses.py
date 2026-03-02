@@ -178,7 +178,7 @@ class TrainConfig:
     scheduler_type: str = "cosine_with_warmup"
     weight_decay: float = 1e-2
     num_warmup_steps: Optional[int] = None
-    num_workers: int = 8
+    num_workers: int = 2
     prefetch_factor: int = 2
     num_repeat_data: int = 2
 

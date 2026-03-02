@@ -2,9 +2,6 @@ model:
   max_x_dim: 4
   max_y_dim: 3
   dim_mlp: 64
-
-  use_missing_marker: false 
-  
   dim_attn: 64
   nhead: 4
   dropout: 0.0
@@ -12,15 +9,12 @@ model:
   num_layers_encoder: 4
   num_layers_decoder: 4
   ctx_prefix_encoder_layer: true
-
   dim_hidden: 128
   depth: 3
   num_components: 20
-
   use_ar: false 
-
   std_min: 1e-4
   std_max: 1.0
   single_mlp: false
-  
+  use_missing_marker: false 
   

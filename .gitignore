@@ -5,6 +5,7 @@ datasets/train
 results/plots
 outputs/
 logs/
+wandb/
 .env
 
 *.log
@@ -14,7 +15,3 @@ logs/
 *.pdf
 *.pt
 *.pkl
-
-# Will be provided soon 
-train.sh
-train.py

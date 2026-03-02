@@ -117,6 +117,8 @@ class GMMPredictionHead(nn.Module):
 
         Args:
             input: [B, DY, N, H]
+            y_mask: [B, DY]
+            
         Returns:
             [B, DY, N, K, 3] where last dim is [means..., stds..., weights...]
         """

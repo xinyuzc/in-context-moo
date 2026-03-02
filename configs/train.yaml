@@ -24,7 +24,7 @@ train:
   scheduler_type: cosine_with_warmup
   weight_decay: 1e-2
   num_warmup_steps: null
-  num_workers: 8
+  num_workers: 2
   prefetch_factor: 2
   num_repeat_data: 2
 
@@ -60,8 +60,8 @@ optimization:
   dim_mask_gen_mode: full
   single_obs_x_dim: null
   single_obs_y_dim: null
-  read_cache: false
-  write_cache: false
+  read_cache: true
+  write_cache: true
   epsilon: 1.0
 
 log:

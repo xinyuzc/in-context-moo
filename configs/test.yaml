@@ -37,9 +37,6 @@ experiment:
   override: false
   log_to_wandb: false
 
-sampler:
-  standardize: true
-
 data:
   function_name: dx2_dy2
   data_id: null

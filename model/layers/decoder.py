@@ -237,7 +237,7 @@ class Decoder(nn.Module):
         out_candidate_reshaped = out_candidate.view(B, DY, n_cand, -1)
 
         assert out_candidate_reshaped.shape == (B, DY, n_cand, self.dim_mlp)
-        return self.prediction_head(out_candidate_reshaped, x_mask, y_mask)
+        return self.prediction_head(out_candidate_reshaped, y_mask, x_mask)
 
     def _forward_optimization(
         self,

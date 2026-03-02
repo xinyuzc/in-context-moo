@@ -38,12 +38,19 @@ python generate_data.py  --config-name=generate_data \
 ```
 Check all available arguments in `configs/generate_data.yaml`. 
 
-Dataset will be saved at `datasets/train/x_dim_1/y_dim_1/gp_0.hdf5`. Note that dataset can be alternatively saved under `datasets/{data.data_id}/train/x_dim_1/y_dim_1/gp_0.hdf5` by assigning valid values to `data.data_id`.
+Dataset will be saved at `datasets/train/x_dim_1/y_dim_1/gp_0.hdf5`. Note that dataset can be alternatively saved under `datasets/{data.data_id}/train/x_dim_1/y_dim_1/gp_0.hdf5` and used for training by assigning valid values to `data.data_id`. This could be useful if you would like to try different priors.
+
+### Train 
+To run training script (`train.py`): 
+```
+python train.py --config-name=train experiment.expid=[EXPID]
+```
+Check all avaialable arguments in `configs/train.yaml`.
 
 ### Evaluation 
 To run test script (`test.py`): 
 ```
-python test.py --config-name=test
+python test.py --config-name=test experiment.expid=[EXPID]
 ```
 Check all available arguments in `configs/test.yaml`.
 

@@ -5,8 +5,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
 #SBATCH --array=0-14
-#SBATCH --output=log/data/%x_%j.output
-#SBATCH --error log/data/%x_%j.err
+#SBATCH --output=outputs/data/%x_%j.output
+#SBATCH --error=outputs/data/%x_%j.err
 
 # environment
 module load mamba

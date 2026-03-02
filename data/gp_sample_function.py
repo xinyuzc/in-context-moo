@@ -86,7 +86,7 @@ def prepare_prediction_batches(
     yc = y[:, idx1]
     xt = x[:, idx2]
     yt = y[:, idx2]
-
+    
     return xc, yc, xt, yt, x_mask, y_mask
 
 
