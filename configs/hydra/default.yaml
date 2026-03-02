@@ -1,0 +1,8 @@
+output_subdir: null  
+run:  
+  dir: .
+job: 
+  chdir: false # working directory remain unchanged
+verbose: [__main__] 
+
+  

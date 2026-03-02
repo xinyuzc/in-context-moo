@@ -1,0 +1,72 @@
+defaults:
+  - default
+  - data
+  - model
+  - _self_
+
+experiment:
+  seed: 0
+  mode: train
+  model_name: TAMO
+  device: cuda
+  expid: null
+  resume: false
+  override: false
+  log_to_wandb: true
+
+train:
+  num_total_epochs: 400000
+  num_burnin_epochs: 395000
+  nc_burnin_ratio: 0.8
+  lr1: 1e-3
+  lr2: 4e-5
+  optimizer_type: adamw
+  scheduler_type: cosine_with_warmup
+  weight_decay: 1e-2
+  num_warmup_steps: null
+  num_workers: 8
+  prefetch_factor: 2
+  num_repeat_data: 2
+
+loss:
+  use_cumulative_rewards: true
+  batch_standardize: true
+  clip_rewards: true
+  loss_weight: 1.0
+  discount_factor: 0.99
+  max_norm: 1.0
+
+prediction:
+  batch_size: 32
+  nc: null
+  min_nc: 2
+  max_nc: 50
+  read_cache: false
+
+optimization:
+  use_grid_sampling: false
+  use_fixed_query_set: true
+  use_factorized_policy: false
+  use_time_budget: true
+  use_curriculum: false
+  batch_size: 4
+  num_samples: 4
+  num_query_points: 256
+  T: 100
+  min_T: 20
+  max_T: 100
+  regret_type: norm_ratio
+  num_initial_points: 1
+  dim_mask_gen_mode: full
+  single_obs_x_dim: null
+  single_obs_y_dim: null
+  read_cache: false
+  write_cache: false
+  epsilon: 1.0
+
+log:
+  freq_log: 200
+  freq_save: 500
+  freq_save_extra_burnin: 25000
+  freq_save_extra: 5000
+  freq_log_grad: 1000

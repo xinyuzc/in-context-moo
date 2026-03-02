@@ -1,0 +1,84 @@
+defaults:
+  - default
+  - _self_
+
+model:
+  max_x_dim: 4
+  max_y_dim: 3
+  dim_mlp: 64
+  dim_attn: 64
+  nhead: 4
+  dropout: 0.0
+  num_layers_backbone: 4
+  num_layers_encoder: 4
+  num_layers_decoder: 4
+  ctx_prefix_encoder_layer: true
+  dim_hidden: 128
+  depth: 3
+  num_components: 20
+  use_ar: false
+  std_min: 0.0001
+  std_max: 1.0
+  single_mlp: false
+  use_missing_marker: false
+
+extra:
+  ckpt_name: ckpt.tar
+  suffix_segment: null
+
+experiment:
+  seed: 0
+  mode: test
+  task: optimization
+  model_name: TAMO
+  device: cuda
+  expid: null
+  resume: true
+  override: false
+  log_to_wandb: false
+
+sampler:
+  standardize: true
+
+data:
+  function_name: dx2_dy2
+  data_id: null
+  dim_scatter_mode: random_k
+  sigma: 0.0
+  scene: ship
+
+prediction:
+  batch_size: 8
+  nc: null
+  min_nc: 2
+  max_nc: 50
+  read_cache: true
+
+optimization:
+  use_grid_sampling: true
+  use_fixed_query_set: true
+  use_time_budget: true
+  use_factorized_policy: false
+  batch_size: 1
+  T: 100
+  min_T: 10
+  max_T: 100
+  regret_type: ratio
+  num_initial_points: 1
+  num_samples: 1
+  dim_mask_gen_mode: full
+  single_obs_x_dim: null
+  single_obs_y_dim: null
+  read_cache: true
+  write_cache: true
+  epsilon: 0.0
+  num_query_points: 2048
+  fantasy: false
+  q: 1
+  cost_mode: false
+  cost: 1.0
+
+log:
+  plot_enabled: true
+  plot_nc_list: null
+  plot_per_n_steps: 50

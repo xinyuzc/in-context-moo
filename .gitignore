@@ -1,0 +1,20 @@
+__pycache__/
+.vscode
+
+datasets/train
+results/plots
+outputs/
+logs/
+.env
+
+*.log
+*.output
+*.err
+
+*.pdf
+*.pt
+*.pkl
+
+# Will be provided soon 
+train.sh
+train.py

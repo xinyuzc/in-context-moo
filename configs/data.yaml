@@ -1,0 +1,21 @@
+data:
+  function_name: gp
+  dim_scatter_mode: random_k
+  sigma: 0.0
+  x_dim_list: [1]
+  y_dim_list: [1]
+  max_x_dim: 4
+  max_y_dim: 3
+  data_id: null
+  sampler_list: [multi_task_gp_prior_sampler, multi_output_gp_prior_sampler]
+  data_kernel_type_list: [rbf, matern32, matern52]
+  sampler_weights: [1, 1]
+  sample_kernel_weights: [1, 1, 1]
+  lengthscale_range: [0.1, 2.0]
+  std_range: [0.1, 1.0]
+  min_rank: 1
+  max_rank: null
+  p_iso: 0.5
+  standardize: true
+  jitter: 1e-3
+  max_tries: 6

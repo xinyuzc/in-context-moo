@@ -1,0 +1,13 @@
+defaults:
+  - hydra: default
+  - data
+  - _self_
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+
+wandb:
+  project: TAMO
+  name: ${experiment.expid}
+  group: ${experiment.model_name}
+  job_type: debug
+  tags: ["${experiment.model_name}", "${experiment.mode}"]

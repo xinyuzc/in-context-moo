@@ -1,0 +1,22 @@
+defaults:
+  - hydra: default
+  - data
+  - _self_
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+
+experiment:
+  seed: 0
+  mode: train
+  expid: dx${generate.x_dim}_dy${generate.y_dim}_${generate.filename}_${now:%Y%m%d_%H%M%S}
+  device: cuda
+  resume: true
+
+generate:
+  x_dim: 1
+  y_dim: 1
+  sampler_type: gp
+  grid: false 
+  num_datapoints: 300
+  num_datasets: 100000
+  filename: gp
