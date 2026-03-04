@@ -13,7 +13,7 @@ import torch.nn.functional as F
 
 from utils.types import FloatListOrNestedOrTensor, NestedFloatList
 from utils.dataclasses import OptimizationConfig, PredictionConfig, DataConfig, LossConfig
-from data.states import ObservationTracker
+from data.obs_tracker import ObservationTracker
 from data.function_sampling import factorized_to_flat_index, sample_factorized_domain
 from data.gp_sample_function import GPSampleFunction
 from model import TAMO

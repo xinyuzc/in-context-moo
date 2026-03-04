@@ -32,7 +32,7 @@ from utils.plot import plot_1d, plot_acq_values, plot_prediction_batch
 from utils.types import NestedFloatList
 from utils.save import save_data, save_fig
 
-from data.states import ObservationTracker
+from data.obs_tracker import ObservationTracker
 from data.dataset import MultiFileHDF5Dataset
 from data.base.preprocessing import make_range_nested_list, has_nan_or_inf
 from data.function import TestFunction
