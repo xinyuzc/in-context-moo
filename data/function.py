@@ -1,4 +1,4 @@
-"""Create environment for multi-objective minimization tasks based on:
+"""Create environment for multi-objective minimization based on:
 - Botorch function, or
 - Linear interpolation of dataset
 
@@ -552,6 +552,7 @@ class SyntheticFunction(TestFunction):
 
     @staticmethod
     def get_function_constructor(function_name: str) -> Optional[callable]:
+        
         func_constructor = SYN_FUNCTIONS.get(function_name)
         return func_constructor
 

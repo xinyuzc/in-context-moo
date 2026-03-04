@@ -1,4 +1,4 @@
-"""Optimization or prediction forwards."""
+"""Optimization and prediction forwards."""
 
 import random
 from dataclasses import dataclass
@@ -12,8 +12,8 @@ import torch
 import torch.nn.functional as F
 
 from utils.types import FloatListOrNestedOrTensor, NestedFloatList
-from utils.dataclasses import OptimizationConfig, PredictionConfig, DataConfig
-from data.states import States
+from utils.dataclasses import OptimizationConfig, PredictionConfig, DataConfig, LossConfig
+from data.states import ObservationTracker
 from data.function_sampling import factorized_to_flat_index, sample_factorized_domain
 from data.gp_sample_function import GPSampleFunction
 from model import TAMO
@@ -22,11 +22,6 @@ from model.layers import GMMPredictionHead
 
 @dataclass
 class QueryResult:
-    """Result from select_next_query.
-
-    Supports both attribute access and tuple-style indexing for backward compatibility.
-    """
-
     next_x: Tensor  # [B, 1, max_x_dim] - selected query point
     indices: Tensor  # [B] - flat indices of selected points
     log_probs: Tensor  # [B] - log probabilities (gradients preserved)
@@ -69,27 +64,25 @@ class QueryResult:
         return fields[index]
 
 
-GAMMA = 1.0
+GAMMA = 0.99
 
 
 def _get_cumulative_rewards(reward: Tensor, discount_factor: float = 0.98) -> Tensor:
-    """Compute discount future rewards from step rewards.
-
-    G_t = r_t + gamma * r_{t+1} + gamma^2 * r_{t+2} + ...
+    """Compute discount future return.
 
     Args:
         reward: [B, H]
         discount_factor (float): discount factor on future rewards
 
     Returns:
-        cumulative_rewards: [B, H]
+        cumulative_rewards of shape [B, H]
     """
     _, H = reward.shape
     cumulative_rewards = torch.zeros_like(reward)
 
     for t in reversed(range(H)):
         # t = H - 1: cumulative_rewards[:, H - 1] = reward[:, H - 1]
-        # t = H - 2: cumulative_rewards[:, H - 2] = reward[:, H - 2] + discount_factor * reward[:, H - 1]
+        # t = H - 2: cumulative_rewards[:, H - 2] = reward[:, H - 2] + discount_factor * cumulative_rewards[:, H - 1]
         if t == H - 1:
             # the last step: R_t = r_t
             cumulative_rewards[:, t] = reward[:, t]
@@ -102,7 +95,6 @@ def _get_cumulative_rewards(reward: Tensor, discount_factor: float = 0.98) -> Te
     return cumulative_rewards
 
 
-# reward standardization over batch dim or trajectory dim
 def _standardize(
     B: int,
     H: int,
@@ -110,6 +102,7 @@ def _standardize(
     batch_standardize: bool,
     eps=np.finfo(np.float32).eps.item(),
 ) -> Tensor:
+    """Reward standardization along batch dim or horizon dim."""
     if batch_standardize:
         assert B > 1
         rewards = (step_rewards - step_rewards.mean(dim=0, keepdim=True)) / (
@@ -215,48 +208,36 @@ def select_next_query(
     x_mask: Tensor,
     y_mask: Tensor,
     input_bounds: FloatListOrNestedOrTensor,
+    opt_config: OptimizationConfig,
     d: int,
     t: int,
     T: int,
-    use_grid_sampling: bool = True,
-    use_fixed_query_set: bool = True,
-    use_factorized_policy: bool = False,
-    use_time_budget: bool = True,
     observed_target_y_mask: Optional[Tensor] = None,
     query_chunks: Optional[Tensor] = None,
     query_x_mask: Optional[Tensor] = None,
-    epsilon: float = 1.0,
-    use_logit_mask: bool = False,
-    read_cache: bool = False,
-    write_cache: bool = False,
     auto_clear_cache: bool = True,
+    use_logit_mask: bool = False,
     logit_mask: Optional[Tensor] = None,
 ) -> QueryResult:
     """Select the next query point based on current context and query set.
 
     Args:
-        model: Model with `action()` method
-        x_ctx: Context inputs [B, num_ctx, max_x_dim]
-        y_ctx: Context outputs [B, num_ctx, max_y_dim]
-        x_mask: Valid x dimensions [max_x_dim]
-        y_mask: Valid y dimensions [max_y_dim]
-        input_bounds: Input bounds (list / nested list / tensor)
+        model: TAMO model
+        x_ctx: [B, num_ctx, max_x_dim]
+        y_ctx: [B, num_ctx, max_y_dim]
+        x_mask: [max_x_dim]
+        y_mask: [max_y_dim]
+        input_bounds: list / nested list / tensor
+        opt_cfg: Optimization config (policy flags, caching, epsilon, etc.)
         d: Number of candidate points per subspace
         t: Current time step
         T: Total time steps (budget)
-        use_grid_sampling: Whether to use grid-based sampling
-        use_fixed_query_set: Whether to reuse the provided query set
-        use_factorized_policy: Whether to use factorized action space
-        use_time_budget: Whether to condition policy on remaining budget
-        y_mask_tar: Optional target y mask [max_y_dim]
-        query_chunks: Pre-computed query chunks [d, max_x_dim]
-        query_x_mask: Pre-computed chunk masks [n, max_x_dim]
-        evaluate: If True, also return logits
-        read_cache: Whether to read from model cache
-        write_cache: Whether to write to model cache
-        logit_mask: Mask for valid logits [B, n, d]
-        epsilon: Exploration rate for epsilon-greedy
-        auto_clear_cache: Whether to clear cache at t=T
+        observed_target_y_mask (Optional): [max_y_dim]
+        query_chunks (Optional): [d, max_x_dim]
+        query_x_mask (Optional): [n, max_x_dim]
+        auto_clear_cache: Clear cache at t=T
+        use_logit_mask: Whether to mask out queried points
+        logit_mask: [B, n, d]
 
     Returns:
         QueryResult dataclass containing:
@@ -274,29 +255,31 @@ def select_next_query(
     device = x_ctx.device
 
     # Generate query set if not provided or not fixed
-    if query_chunks is None or not use_fixed_query_set:
+    if query_chunks is None or not opt_config.use_fixed_query_set:
         query_chunks, query_x_mask = sample_factorized_domain(
             d=d,
             max_x_dim=dx_max,
             device=device,
             x_mask=x_mask,
             input_bounds=input_bounds,
-            use_grid_sampling=use_grid_sampling,
-            use_factorized_policy=use_factorized_policy,
+            use_grid_sampling=opt_config.use_grid_sampling,
+            use_factorized_policy=opt_config.use_factorized_policy,
         )
 
     # Get dimensions
     n = query_x_mask.shape[0]
 
     # Expand tensors for batch processing
-    query_x_mask_expanded = repeat(query_x_mask, "n dim -> b n dim", b=B)
-    query_chunks_expanded = repeat(query_chunks, "d dim -> b n d dim", b=B, n=n)
-    x_mask_expanded = repeat(x_mask, "dim -> b dim", b=B)
-    y_mask_expanded = repeat(y_mask, "dim -> b dim", b=B)
+    query_x_mask_expanded = query_x_mask.unsqueeze(0).expand(B, -1, -1)
+    query_chunks_expanded = (
+        query_chunks.unsqueeze(0).unsqueeze(0).expand(B, n, -1, -1).contiguous()
+    )
+    x_mask_expanded = x_mask.unsqueeze(0).expand(B, -1)
+    y_mask_expanded = y_mask.unsqueeze(0).expand(B, -1)
     observed_target_y_mask_expanded = (
-        repeat(observed_target_y_mask, "dim -> b dim", b=B)
-        if observed_target_y_mask is not None
-        else None
+        None
+        if observed_target_y_mask is None
+        else observed_target_y_mask.unsqueeze(0).expand(B, -1)
     )
 
     # Create logit mask
@@ -318,13 +301,13 @@ def select_next_query(
         observed_target_y_mask=observed_target_y_mask_expanded,
         t=t,
         T=T,
-        use_budget=use_time_budget,
+        use_budget=opt_config.use_time_budget,
         return_logits=use_logit_mask,
-        read_cache=read_cache,
-        write_cache=write_cache,
+        read_cache=opt_config.read_cache,
+        write_cache=opt_config.write_cache,
         auto_clear_cache=auto_clear_cache,
         logit_mask=logit_mask,
-        epsilon=epsilon,
+        epsilon=opt_config.epsilon,
     )
     infer_time = time.time() - t0
 
@@ -368,10 +351,10 @@ def select_next_query_wrapper(
     x_ctx: Tensor,
     y_ctx: Tensor,
     model: TAMO,
-    states: States,
+    observation_tracker: ObservationTracker,
     model_x_range: NestedFloatList,
-    opt_cfg: OptimizationConfig,
-    pred_cfg: PredictionConfig,
+    opt_config: OptimizationConfig,
+    pred_config: PredictionConfig,
     d: int,
     T: int,
     query_chunks: Optional[Tensor] = None,
@@ -386,7 +369,7 @@ def select_next_query_wrapper(
         x_ctx (Tensor): Current context inputs [B, N_ctx, x_dim]
         y_ctx (Tensor): Current context outputs [B, N_ctx, y_dim]
         model (TAMO): model for query selection
-        states (States): Optimization state tracker
+        observation_tracker (ObservationTracker): Observed mask and cost tracker
         model_x_range (NestedFloatList): Input bounds used during model training
         opt_cfg (OptimizationConfig): Optimization configuration
         pred_cfg (PredictionConfig): Prediction configuration
@@ -412,31 +395,24 @@ def select_next_query_wrapper(
             pred_cfg.read_cache is False
         ), "Fantasy with read_cache=True not supported"
 
-    _validate_inputs(fantasy, opt_cfg, pred_cfg)
+    _validate_inputs(fantasy, opt_config, pred_config)
 
     result = select_next_query(
         model=model,
         x_ctx=x_ctx,
         y_ctx=y_ctx,
-        x_mask=states.x_mask,
-        y_mask=states.y_mask,
-        observed_target_y_mask=states.y_mask_target,
+        x_mask=observation_tracker.x_mask,
+        y_mask=observation_tracker.y_mask,
         input_bounds=model_x_range,
+        opt_config=opt_config,
         d=d,
-        t=states.get_cost_used(),
+        t=observation_tracker.get_cost_used(),
         T=T,
-        use_grid_sampling=opt_cfg.use_grid_sampling,
-        use_fixed_query_set=opt_cfg.use_fixed_query_set,
-        use_factorized_policy=opt_cfg.use_factorized_policy,
-        use_time_budget=opt_cfg.use_time_budget,
-        epsilon=opt_cfg.epsilon,
-        read_cache=opt_cfg.read_cache,
-        write_cache=opt_cfg.write_cache,
+        observed_target_y_mask=observation_tracker.y_mask_target,
         query_chunks=query_chunks,
         query_x_mask=query_x_mask,
-        logit_mask=logit_mask,
         use_logit_mask=True,
-        auto_clear_cache=True,
+        logit_mask=logit_mask,
     )
 
     if fantasy:
@@ -445,9 +421,9 @@ def select_next_query_wrapper(
 
         # Prepare expanded masks
         b = x_ctx.shape[0]
-        x_mask_exp = repeat(states.x_mask, "d -> b d", b=b)
-        y_mask_exp = repeat(states.y_mask, "d -> b d", b=b)
-        y_mask_tar_exp = repeat(states.y_mask_target, "d -> b d", b=b)
+        x_mask_exp = repeat(observation_tracker.x_mask, "d -> b d", b=b)
+        y_mask_exp = repeat(observation_tracker.y_mask, "d -> b d", b=b)
+        y_mask_tar_exp = repeat(observation_tracker.y_mask_target, "d -> b d", b=b)
 
         # Predict fantasized outcome
         out = model.predict(
@@ -468,46 +444,32 @@ def select_next_query_wrapper(
 def optimization_forward(
     model: TAMO,
     data_cfg: DataConfig,
+    opt_config: OptimizationConfig,
+    loss_config: LossConfig,
     T: int,
-    batch_size: int,
-    num_samples: int,
-    num_query_points: int,
-    use_grid_sampling: bool,
-    use_factorized_policy: bool,
-    use_time_budget: bool,
-    use_fixed_query_set: bool,
-    random_num_initial: bool,
-    num_initial_points: int,
-    regret_type: str,
-    use_cumulative_rewards: bool,
-    discount_factor: float,
-    batch_standardize: bool,
-    clip_rewards: bool,
     device: str,
-    read_cache: bool,
-    write_cache: bool,
 ):
     """Optimization forward (model + loss)"""
     # Initialize sampler
     gp_sample_function = GPSampleFunction(
         data_config=data_cfg,
-        batch_size=batch_size,
-        num_samples=num_samples,
-        d=num_query_points,
-        use_grid_sampling=use_grid_sampling,
-        use_factorized_policy=use_factorized_policy,
+        batch_size=opt_config.batch_size,
+        num_samples=opt_config.num_samples,
+        d=opt_config.num_query_points,
+        use_grid_sampling=opt_config.use_grid_sampling,
+        use_factorized_policy=opt_config.use_factorized_policy,
         device=device,
     )
 
     # Initializations
-    if random_num_initial:
+    if opt_config.random_num_initial:
         num_initial_points = random.randint(1, T - 1)
     else:
-        num_initial_points = num_initial_points
+        num_initial_points = opt_config.num_initial_points
 
     x_ctx, y_ctx, _, _ = gp_sample_function.init(
         num_initial_points=num_initial_points,
-        regret_type=regret_type,
+        regret_type=opt_config.regret_type,
         compute_hv=False,
         compute_regret=False,
         device=device,
@@ -526,22 +488,17 @@ def optimization_forward(
             x_mask=gp_sample_function.x_mask,
             y_mask=gp_sample_function.y_mask,
             input_bounds=data_cfg.x_range,
-            d=num_query_points,
+            opt_config=opt_config,
+            d=opt_config.num_query_points,
             t=t,
             T=T,
-            use_grid_sampling=use_grid_sampling,
-            use_fixed_query_set=use_fixed_query_set,
-            use_factorized_policy=use_factorized_policy,
-            use_time_budget=use_time_budget,
             query_chunks=gp_sample_function.chunks,
             query_x_mask=gp_sample_function.chunk_mask,
             use_logit_mask=False,
-            read_cache=read_cache,
-            write_cache=write_cache,
         )
-        indices = query_results[1]
-        logp = query_results[2]
-        entropy = query_results[3]
+        indices = query_results.indices
+        logp = query_results.log_probs
+        entropy = query_results.entropy
 
         # Update context with new query points
         x_ctx, y_ctx, _, regret = gp_sample_function.step(
@@ -550,7 +507,7 @@ def optimization_forward(
             y_ctx=y_ctx,
             compute_hv=False,
             compute_regret=True,
-            regret_type=regret_type,
+            regret_type=opt_config.regret_type,
         )
 
         # Update tensors
@@ -564,10 +521,10 @@ def optimization_forward(
     loss_acq, step_rewards = compute_policy_loss(
         step_rewards=neg_regrets,
         log_probs=log_probs,
-        use_cumulative_r=use_cumulative_rewards,
-        discount_factor=discount_factor,
-        batch_standardize=batch_standardize,
-        clip_rewards=clip_rewards,
+        use_cumulative_r=loss_config.use_cumulative_rewards,
+        discount_factor=loss_config.discount_factor,
+        batch_standardize=loss_config.batch_standardize,
+        clip_rewards=loss_config.clip_rewards,
         batch_first=False,
     )
 
@@ -615,7 +572,6 @@ def prediction_forward(
     y_mask: Tensor,
     y_mask_tar: Optional[Tensor] = None,
     read_cache: bool = False,
-    **kwargs,
 ):
     """Forward pass for prediction (model + loss).
 
@@ -632,7 +588,6 @@ def prediction_forward(
     Returns:
         nll of shape [1],
         mse of shape [max_y_dim],
-        None for api compatibility,
         inference time
     """
     # GMMOutput: (means, stds, weights) of shape [B, nt, dy_max, K]
@@ -655,7 +610,7 @@ def prediction_forward(
     mse = F.mse_loss(input=mean, target=y_tar, reduction="none")
     mse = _reduce(mse, dim=(0, 1))
 
-    return nll, mse, None, inference_time
+    return nll, mse, inference_time
 
 
 def _get_opt_curriculum(

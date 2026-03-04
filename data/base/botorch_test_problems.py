@@ -153,6 +153,63 @@ class AckleyRosenbrock(BaseTestProblem, ABC):
         raise NotImplementedError
 
 
+class HPO_3DGS(BaseTestProblem, ABC):
+    """HPO_3DGS benchmark problem for 2 or 3 objectives."""
+
+    dim = 5
+    _bounds = [(0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0)]
+    num_objectives = 2
+    _ref_point = None
+    _max_hv = None
+
+    def __init__(
+        self,
+        noise_std: Optional[float] = None,
+        negate: bool = True,  # default minimization
+        dtype: torch.dtype = torch.double,
+        scene: str = "ship",
+        num_objectives: int = 2,
+    ):
+        if isinstance(noise_std, list) and len(noise_std) != len(self._ref_point):
+            raise InputDataError(
+                f"If specified as a list, length of noise_std ({len(noise_std)}) "
+                f"must match the number of objectives ({len(self._ref_point)})"
+            )
+        super().__init__(negate=negate, noise_std=noise_std, dtype=dtype)
+        if self._ref_point is not None:
+            ref_point = torch.tensor(self._ref_point, dtype=dtype)
+            if negate:
+                ref_point *= -1
+            self.register_buffer("ref_point", ref_point)
+
+        assert scene in ["lego", "materials", "mic", "ship"]
+        set_NERF_scene(scene)
+
+        if num_objectives == 2:
+            self.nerf_synthetic = NERF_synthetic
+        elif num_objectives == 3:
+            self.nerf_synthetic = NERF_synthetic_fnum_3
+        else:
+            raise ValueError("num_objectives must be 2 or 3")
+
+        self.scene = scene
+        self.num_objectives = num_objectives
+
+    def evaluate_true(self, X: Tensor) -> Tensor:
+        """Evaluate the function on a set of points.
+
+        Args:
+            X: Tensor of shape (*batch_shape, d) in [0, 1]^d
+
+        Returns:
+            y: Tensor of shape (*batch_shape, 2) or (*batch_shape, 3) corresponding to objectives
+        """
+        X_np = X.cpu().numpy()
+        y_np = self.nerf_synthetic(X_np)
+        y = torch.from_numpy(y_np).to(X.device).to(X.dtype)
+        return y
+
+
 class DiscreteTestProblem(BaseTestProblem):
     """
     References: https://github.com/facebookresearch/bo_pr/blob/main/discrete_mixed_bo/problems/base.py
@@ -479,63 +536,6 @@ class OilSorbentContinuousMid(BaseTestProblem, ABC):
             - 26.2718 * drop_features["V6"].pow(2)
         )
         return -torch.cat([wca, q, sigma], dim=-1)
-
-
-class HPO_3DGS(BaseTestProblem, ABC):
-    """HPO_3DGS benchmark problem for 2 or 3 objectives."""
-
-    dim = 5
-    _bounds = [(0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0)]
-    num_objectives = 2
-    _ref_point = None
-    _max_hv = None
-
-    def __init__(
-        self,
-        noise_std: Optional[float] = None,
-        negate: bool = True,  # default minimization
-        dtype: torch.dtype = torch.double,
-        scene: str = "ship",
-        num_objectives: int = 2,
-    ):
-        if isinstance(noise_std, list) and len(noise_std) != len(self._ref_point):
-            raise InputDataError(
-                f"If specified as a list, length of noise_std ({len(noise_std)}) "
-                f"must match the number of objectives ({len(self._ref_point)})"
-            )
-        super().__init__(negate=negate, noise_std=noise_std, dtype=dtype)
-        if self._ref_point is not None:
-            ref_point = torch.tensor(self._ref_point, dtype=dtype)
-            if negate:
-                ref_point *= -1
-            self.register_buffer("ref_point", ref_point)
-
-        assert scene in ["lego", "materials", "mic", "ship"]
-        set_NERF_scene(scene)
-
-        if num_objectives == 2:
-            self.nerf_synthetic = NERF_synthetic
-        elif num_objectives == 3:
-            self.nerf_synthetic = NERF_synthetic_fnum_3
-        else:
-            raise ValueError("num_objectives must be 2 or 3")
-
-        self.scene = scene
-        self.num_objectives = num_objectives
-
-    def evaluate_true(self, X: Tensor) -> Tensor:
-        """Evaluate the function on a set of points.
-
-        Args:
-            X: Tensor of shape (*batch_shape, d) in [0, 1]^d
-
-        Returns:
-            y: Tensor of shape (*batch_shape, 2) or (*batch_shape, 3) corresponding to objectives
-        """
-        X_np = X.cpu().numpy()
-        y_np = self.nerf_synthetic(X_np)
-        y = torch.from_numpy(y_np).to(X.device).to(X.dtype)
-        return y
 
 
 if __name__ == "__main__":

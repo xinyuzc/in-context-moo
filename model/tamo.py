@@ -444,9 +444,6 @@ class TAMO(nn.Module):
         Returns: Gaussian mixture model output (means, stds, weights) each of shape [B, nt, dy_max, num_components]
         """
         B, dy_max = y_mask.shape
-
-        # Slice context to only new points if reading from cache
-        # [B, nc_new, dx_max], [B, nc_new, dy_max]
         x_ctx, y_ctx = self._slice_context(x_ctx, y_ctx, read_cache)
 
         # Default observed target mask to y_mask if not provided
@@ -548,8 +545,6 @@ class TAMO(nn.Module):
         # TODO multiple new context points, fixed old context...
         if read_cache:
             assert write_cache is True, "If reading cache, must also write cache."
-
-        # Slice context to only new points if reading from cache
         x_ctx, y_ctx = self._slice_context(x_ctx, y_ctx, read_cache)
 
         B, n_spaces, n_cand, dx_max = query_chunks.shape

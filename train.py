@@ -1,5 +1,6 @@
 """Training script."""
 
+import math
 import time
 import gc
 import os.path as osp
@@ -58,7 +59,9 @@ def main(config: DictConfig):
     log_cfg = LogConfig(**config.log)
 
     # Setup logging
-    log_filename = get_log_filename(model_name=exp_cfg.model_name, expid=exp_cfg.expid, prefix=exp_cfg.mode)
+    log_filename = get_log_filename(
+        model_name=exp_cfg.model_name, expid=exp_cfg.expid, prefix=exp_cfg.mode
+    )
     log = get_log_fn(filename=log_filename)
     log(f"Logs will be saved to:\t{log_filename}")
 
@@ -214,8 +217,11 @@ def train(
     ravg = Averager()
 
     # Repeat dataset if number of epochs exceeds
-    repeat_round_start = epoch // (max(1, dataset_size // pred_cfg.batch_size))
-    for repeat_round in range(repeat_round_start, train_cfg.num_repeat_data):
+    max_epochs_from_dataset = max(1, dataset_size // pred_cfg.batch_size)
+    repeat_round_start = epoch // max_epochs_from_dataset
+    num_repeat_data = math.ceil(num_total_epochs / max_epochs_from_dataset)
+    log(f"The loaded datasets would be repeated up to {num_repeat_data} times")
+    for repeat_round in range(repeat_round_start, num_repeat_data):
         # ===============================================
         # Create dataloader
         # ===============================================
@@ -231,13 +237,14 @@ def train(
         batch_idx = 0
 
         # Skip batches already seen before checkpoint
-        if resume_batch_idx > 0:
-            log(f"Skipping {resume_batch_idx} batches to resume position...")
-            for _ in range(resume_batch_idx):
-                if next(dataloader_iter, None) is None:
-                    break
-                batch_idx += 1
-            resume_batch_idx = 0  # Only skip on the first repeat_round
+        # Removed - would be too time consuming when epoch is large
+        # if resume_batch_idx > 0:
+        #     log(f"Skipping {resume_batch_idx} batches to resume position...")
+        #     for _ in range(resume_batch_idx):
+        #         if next(dataloader_iter, None) is None:
+        #             break
+        #         batch_idx += 1
+        #     resume_batch_idx = 0  # Only skip on the first repeat_round
 
         # Start one training epoch
         while epoch < num_total_epochs:
@@ -311,7 +318,7 @@ def train(
                 device_type=exp_cfg.device, enabled=exp_cfg.device == "cuda"
             ):  # Use AMP only if on GPU
                 # Prediction forward (model + loss)
-                loss_pre, mse_mean, _, _ = prediction_forward(
+                loss_pre, mse_mean, _ = prediction_forward(
                     model=model,
                     x_ctx=xc,
                     y_ctx=yc,
@@ -356,23 +363,9 @@ def train(
                     ) = optimization_forward(
                         model=model,
                         data_cfg=data_cfg,
+                        opt_config=opt_cfg,
+                        loss_config=loss_cfg,
                         T=T,
-                        batch_size=opt_cfg.batch_size,
-                        num_samples=opt_cfg.num_samples,
-                        num_query_points=opt_cfg.num_query_points,
-                        use_grid_sampling=opt_cfg.use_grid_sampling,
-                        use_factorized_policy=opt_cfg.use_factorized_policy,
-                        use_time_budget=opt_cfg.use_time_budget,
-                        use_fixed_query_set=opt_cfg.use_fixed_query_set,
-                        random_num_initial=opt_cfg.random_num_initial,
-                        num_initial_points=opt_cfg.num_initial_points,
-                        regret_type=opt_cfg.regret_type,
-                        use_cumulative_rewards=loss_cfg.use_cumulative_rewards,
-                        discount_factor=loss_cfg.discount_factor,
-                        batch_standardize=loss_cfg.batch_standardize,
-                        clip_rewards=loss_cfg.clip_rewards,
-                        read_cache=opt_cfg.read_cache,
-                        write_cache=opt_cfg.write_cache,
                         device=exp_cfg.device,
                     )
                     loss_acq_val = loss_acq.detach().item()

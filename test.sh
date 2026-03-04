@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=bc
+#SBATCH --job-name=DX12_DY123
 #SBATCH --mem=2G
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
@@ -18,25 +18,17 @@ python --version
 
 # Logging
 plot_enabled=True
-plot_per_n_steps=25
-
-# Model 
-max_x_dim=4
-max_y_dim=3
 
 # Experiment
 task=optimization
 override=True
-seed=${SLURM_ARRAY_TASK_ID}
 CKPT_NAMES=("ckpt.tar")
 suffix_segment=null
 
 # Optimization
 T=100
 regret_type="ratio"
-use_grid_sampling=True
-use_fixed_query_set=True
-d=2048
+num_query_points=2048
 
 # Cache
 opt_read_cache=True
@@ -60,8 +52,7 @@ data_id=null
 ##           Experiment Configurations           ##
 ## ============================================= ##
 
-FUNCTIONS=("BraninCurrin")
-#  "AckleyRosenbrock" "AckleyRastrigin" "BraninCurrin")
+FUNCTIONS=("dx2_dy2" "AckleyRosenbrock" "AckleyRastrigin" "BraninCurrin")
 
 # Set expid to the TAMO experiment you want to evaluate
 expid=DX12_DY123
@@ -98,34 +89,28 @@ expid=DX12_DY123
 for ckpt_name in "${CKPT_NAMES[@]}"; do
     for function_name in "${FUNCTIONS[@]}"; do
         CUDA_LAUNCH_BLOCKING=1 python test.py --config-name=test \
+            experiment.seed=${SLURM_ARRAY_TASK_ID} \
             data.function_name="${function_name}" \
+            data.data_id=${data_id} \
+            data.scene=${scene} \
             experiment.expid="${expid}" \
             experiment.task="${task}" \
             experiment.override=${override} \
             optimization.T=${T} \
-            experiment.seed=${seed} \
-            optimization.use_grid_sampling=${use_grid_sampling} \
-            optimization.use_fixed_query_set=${use_fixed_query_set} \
             optimization.dim_mask_gen_mode=${dim_mask_gen_mode} \
             optimization.single_obs_x_dim=${single_obs_x_dim} \
             optimization.single_obs_y_dim=${single_obs_y_dim} \
             optimization.read_cache=${opt_read_cache} \
             optimization.write_cache=${opt_write_cache} \
             optimization.regret_type=${regret_type} \
-            prediction.read_cache=${pred_read_cache} \
-            model.max_x_dim=${max_x_dim} \
-            model.max_y_dim=${max_y_dim} \
-            log.plot_nc_list="[10,50,100]" \
-            log.plot_enabled=${plot_enabled} \
-            log.plot_per_n_steps=${plot_per_n_steps} \
-            extra.ckpt_name=${ckpt_name} \
-            optimization.num_query_points=${d} \
+            optimization.num_query_points=${num_query_points} \
             optimization.cost=${cost} \
-            extra.suffix_segment=${suffix_segment} \
             optimization.cost_mode=${cost_mode} \
             optimization.q=${q} \
             optimization.fantasy=${fantasy} \
-            data.data_id=${data_id} \
-            data.scene=${scene}
+            prediction.read_cache=${pred_read_cache} \
+            log.plot_enabled=${plot_enabled} \
+            extra.ckpt_name=${ckpt_name} \
+            extra.suffix_segment=${suffix_segment} 
     done
 done

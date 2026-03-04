@@ -4,7 +4,7 @@ from torch import Tensor
 import torch
 
 
-class States:
+class ObservationTracker:
     """Manages dimension masks and cost tracking during multi-objective optimization.
 
     NOTE only involves in test time computing now; to be introduced to training time.
@@ -35,9 +35,9 @@ class States:
         initial_cost: Total cost after initial observations
 
     Example:
-        >>> states = States(x_dim=5, y_dim=3, dim_mask_gen_mode="alternate")
-        >>> mask = states.step()  # Get mask for next observation
-        >>> total_cost = states.get_cost_used()
+        >>> observation_tracker = ObservationTracker(x_dim=5, y_dim=3, dim_mask_gen_mode="alternate")
+        >>> mask = observation_tracker.step()  # Get mask for next observation
+        >>> total_cost = observation_tracker.get_cost_used()
     """
 
     # Valid mask generation modes
@@ -105,9 +105,9 @@ class States:
             raise ValueError(
                 f"num_initial_points must be >= 1, got {num_initial_points}"
             )
-        if dim_mask_gen_mode not in States.VALID_MODES:
+        if dim_mask_gen_mode not in ObservationTracker.VALID_MODES:
             raise ValueError(
-                f"dim_mask_gen_mode must be one of {States.VALID_MODES}, "
+                f"dim_mask_gen_mode must be one of {ObservationTracker.VALID_MODES}, "
                 f"got '{dim_mask_gen_mode}'"
             )
         if dim_mask_gen_mode == "single":
@@ -295,7 +295,7 @@ class States:
     def __repr__(self) -> str:
         """String representation for debugging."""
         return (
-            f"States(x_dim={self.x_dim}, y_dim={self.y_dim}, "
+            f"ObservationTracker(x_dim={self.x_dim}, y_dim={self.y_dim}, "
             f"mode={self.y_observed_mode}, observations={self.num_observations}, "
             f"cost={self.get_cost_used():.2f})"
         )

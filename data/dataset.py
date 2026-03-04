@@ -308,6 +308,9 @@ class MultiFileHDF5Dataset(Dataset):
             pad_x = self.max_x_dim - valid_x_counts
             pad_y = self.max_y_dim - valid_y_counts
 
+            assert pad_x >= 0, f"{self.max_x_dim}-{valid_x_counts}<0"
+            assert pad_y >= 0, f"{self.max_y_dim}-{valid_y_counts}<0"
+            
             xvals = np.pad(xvals, ((0, 0), (0, pad_x)), "constant")
             yvals = np.pad(yvals, ((0, 0), (0, pad_y)), "constant")
 

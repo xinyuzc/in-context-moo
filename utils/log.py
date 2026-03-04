@@ -125,19 +125,12 @@ class MetricTracker:
             time: Inference time per step [num_steps]
 
         Prediction metrics (optional):
-            nll_c: Context negative log-likelihood [num_steps]
             nll_t: Target negative log-likelihood [num_steps]
-            mse_c: Context MSE per dimension [dy, num_steps]
             mse_t: Target MSE per dimension [dy, num_steps]
 
         Query tracking:
             x_queries: Queried input points [B, num_steps*q, dx]
             y_queries: Queried output values [B, num_steps*q, dy]
-            y_mask_history: Observation mask history [num_steps, dy]
-
-        Auxiliary information:
-            acq_values: Acquisition function values (when available)
-            refinement_info: Gradient refinement details (when used)
     """
 
     # Optimization metrics
@@ -148,23 +141,18 @@ class MetricTracker:
     time_list: List[float] = field(default_factory=list)
 
     # Prediction metrics
-    nll_c_list: List[Tensor] = field(default_factory=list)
     nll_t_list: List[Tensor] = field(default_factory=list)
-    mse_c_list: List[Tensor] = field(default_factory=list)
     mse_t_list: List[Tensor] = field(default_factory=list)
 
     # Query tracking
     x_queries_list: List[Tensor] = field(default_factory=list)
     y_queries_list: List[Tensor] = field(default_factory=list)
-    y_mask_history: List[Tensor] = field(default_factory=list)
-
-    # Auxiliary information
-    acq_values_list: List[Optional[Tensor]] = field(default_factory=list)
-    refinement_info_list: List[Dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def _match_query_dim(metric: Union[Tensor, List], n_queries: int):
-        """[B, 1] or [B,] -> [B, n_queries]"""
+        """Expand metric values along query dimension: [B, 1] or [B,] -> [B, n_queries]
+        To align shapes under batch settings: a batch of queries associates with a single metric.
+        """
         if isinstance(metric, Tensor):
             B = len(metric)
             metric = metric.view(B, -1)
@@ -192,13 +180,10 @@ class MetricTracker:
         time: float | List[float],
         x_query: Tensor,
         y_query: Tensor,
-        acq_values: Optional[Tensor] = None,
         match_query_dim: bool = True,
     ):
         """Add metrics from one optimization step."""
         if match_query_dim:
-            # Replicate metric values along query dim to match queries shape
-            # (For batch settings - a batch of queries versus a single metric)
             n_queries = x_query.shape[1]
             hv = self._match_query_dim(hv, n_queries=n_queries)
             hv_query = self._match_query_dim(hv_query, n_queries=n_queries)
@@ -211,47 +196,34 @@ class MetricTracker:
         self.regret_list.append(regret.detach().cpu())
         self.entropy_list.append(entropy.detach().cpu())
         self.time_list += time if isinstance(time, list) else [time]
+
         self.x_queries_list.append(x_query.detach().cpu())
         self.y_queries_list.append(y_query.detach().cpu())
 
-        if acq_values is not None:
-            self.acq_values_list.append(acq_values.detach().cpu())
-        else:
-            self.acq_values_list.append(None)
-
     def add_prediction_step(
-        self, nll_c: Tensor, nll_t: Tensor, mse_c: Tensor, mse_t: Tensor
+        self, nll_t: Tensor, mse_t: Tensor
     ):
         """Add prediction metrics from one step."""
-        self.nll_c_list.append(nll_c)
-        self.nll_t_list.append(nll_t)
-        self.mse_c_list.append(mse_c)
-        self.mse_t_list.append(mse_t)
+        self.nll_t_list.append(nll_t.detach().cpu())
+        self.mse_t_list.append(mse_t.detach().cpu())
 
-    def add_refinement_info(self, info: Dict[str, Any]):
-        """Add gradient refinement information."""
-        self.refinement_info_list.append(info)
-
-    def get_stacked_metrics(self, device: torch.device) -> Dict[str, Tensor]:
+    def get_stacked_metrics(self) -> Dict[str, Tensor]:
         """Convert lists to stacked tensors for saving/plotting."""
         metrics = {
-            "hv": torch.cat(self.hv_list, dim=-1).cpu(),  # [B, T+1]
-            "instant_hv": torch.cat(self.hv_queries_list, dim=-1).cpu(),  # [B, T+1]
-            "regret": torch.cat(self.regret_list, dim=-1).cpu(),  # [B, T+1]
-            "entropy": torch.cat(self.entropy_list, dim=-1).cpu(),  # [B, T+1]
-            "time": torch.tensor(self.time_list, device=device).cpu(),  # [T+1]
+            "hv": torch.cat(self.hv_list, dim=-1),  # [B, T+1]
+            "instant_hv": torch.cat(self.hv_queries_list, dim=-1),  # [B, T+1]
+            "regret": torch.cat(self.regret_list, dim=-1),  # [B, T+1]
+            "entropy": torch.cat(self.entropy_list, dim=-1),  # [B, T+1]
+            "time": torch.tensor(self.time_list),  # [T+1]
+            "x_queries": torch.cat(self.x_queries_list, dim=1),  # [B, num_steps*q, dx]
+            "y_queries": torch.cat(self.y_queries_list, dim=1),  # [B, num_steps*q, dy]
         }
 
         # Add prediction metrics if available
-        if self.nll_c_list:
-            metrics.update(
-                {
-                    "nll_c": torch.stack(self.nll_c_list, dim=-1).cpu(),  # [T+1]
-                    "nll_t": torch.stack(self.nll_t_list, dim=-1).cpu(),  # [T+1]
-                    "mse_c": torch.stack(self.mse_c_list, dim=-1).cpu(),  # [dy, T+1]
-                    "mse_t": torch.stack(self.mse_t_list, dim=-1).cpu(),  # [dy, T+1]
-                }
-            )
+        for key in ("nll_t", "mse_t"):
+            data = getattr(self, f"{key}_list")
+            if data:
+                metrics[key] = torch.stack(data, dim=-1)
 
         return metrics
 
@@ -264,7 +236,15 @@ class MetricTracker:
             "x_query": self.x_queries_list[-1] if self.x_queries_list else None,
             "y_query": self.y_queries_list[-1] if self.y_queries_list else None,
         }
-
+    
+    @staticmethod
+    def get_std(tensor): 
+        B = tensor.shape[0]
+        if B > 1: 
+            return tensor.std().item()
+        else: 
+            return 0.0
+        
     def get_statistics(self) -> Dict[str, float]:
         """Compute summary statistics across all steps."""
         stats = {}
@@ -272,13 +252,13 @@ class MetricTracker:
         if self.hv_list:
             hv_tensor = torch.cat(self.hv_list, dim=-1)  # [B, T]
             stats["hv_final_mean"] = hv_tensor[:, -1].mean().item()
-            stats["hv_final_std"] = hv_tensor[:, -1].std().item()
+            stats["hv_final_std"] = self.get_std(hv_tensor[:, -1])
             stats["hv_max"] = hv_tensor.max().item()
 
         if self.regret_list:
             regret_tensor = torch.cat(self.regret_list, dim=-1)  # [B, T]
             stats["regret_final_mean"] = regret_tensor[:, -1].mean().item()
-            stats["regret_final_std"] = regret_tensor[:, -1].std().item()
+            stats["regret_final_std"] = self.get_std(regret_tensor[:, -1])
             stats["regret_min"] = regret_tensor.min().item()
 
         if self.time_list:

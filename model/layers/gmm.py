@@ -274,26 +274,7 @@ class GMMPredictionHead(nn.Module):
         nll = -log_p
 
         return nll
-        # # Mask invalid dimensions
-        # if y_mask is not None:
-        #     # y_mask: [B, DY] -> [B, 1, DY]
-        #     mask = y_mask.unsqueeze(1).expand_as(nll)
-        #     nll = torch.where(mask, nll, torch.zeros_like(nll))
-
-        #     if reduction == "mean":
-        #         return nll.sum() / mask.sum().clamp(min=1)
-        #     elif reduction == "sum":
-        #         return nll.sum()
-        #     else:
-        #         return nll
-        # else:
-        #     if reduction == "mean":
-        #         return nll.mean()
-        #     elif reduction == "sum":
-        #         return nll.sum()
-        #     else:
-        #         return nll
-
+    
     @staticmethod
     def sample(output: GMMOutput, n_samples: int = 1) -> Tensor:
         """Sample from the GMM.

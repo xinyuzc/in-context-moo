@@ -180,7 +180,6 @@ class TrainConfig:
     num_warmup_steps: Optional[int] = None
     num_workers: int = 2
     prefetch_factor: int = 2
-    num_repeat_data: int = 2
 
     def __post_init__(self):
         assert self.num_burnin_epochs <= self.num_total_epochs
@@ -193,7 +192,7 @@ class TrainConfig:
 
 @dataclass
 class ExConfig:
-    seed: int = 0
+    seed: Optional[int] = None
     mode: str = "train"
     task: str = "optimization"
     model_name: str = "TAMO"

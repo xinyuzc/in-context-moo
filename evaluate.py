@@ -32,7 +32,7 @@ from utils.plot import plot_1d, plot_acq_values, plot_prediction_batch
 from utils.types import NestedFloatList
 from utils.save import save_data, save_fig
 
-from data.states import States
+from data.states import ObservationTracker
 from data.dataset import MultiFileHDF5Dataset
 from data.base.preprocessing import make_range_nested_list, has_nan_or_inf
 from data.function import TestFunction
@@ -51,13 +51,13 @@ class OptimizationLogger:
         self.log = log_fn
         self.use_wandb = use_wandb
 
-    def log_step(self, step: int, states: States, metrics: MetricTracker):
+    def log_step(self, step: int, observation_tracker: ObservationTracker, metrics: MetricTracker):
         """Log information for current optimization step."""
         latest = metrics.get_latest_values()
 
         log_line = f"\n{'='*60}\n"
         log_line += f"Step {step}\n"
-        log_line += f"{states.__repr__()}\n"
+        log_line += f"{observation_tracker.__repr__()}\n"
         log_line += f"{'-'*60}\n"
 
         if latest["hv"] is not None:
@@ -78,14 +78,11 @@ class OptimizationLogger:
     def log_prediction_step(
         self,
         step: int,
-        nll_c: Tensor,
         nll_t: Tensor,
-        mse_c: Tensor,
         mse_t: Tensor,
     ):
         """Log prediction metrics for current step."""
         log_line = f"  [Prediction @ Step {step}]\n"
-        # log_line += f"    NLL Context: {nll_c.mean().item():.4f}\n"
         log_line += f"    NLL Target:  {nll_t.mean().item():.4f}\n"
         log_line += f"    MSE Target:  {mse_t.mean().item():.6f}\n"
         self.log(log_line)
@@ -94,7 +91,6 @@ class OptimizationLogger:
         if self.use_wandb:
             wandb.log(
                 {
-                    # f"opt/nll_context": nll_c.mean().item(),
                     f"opt/nll_target": nll_t.mean().item(),
                     f"opt/mse_target_mean": mse_t.mean().item(),
                     f"opt/step": step,
@@ -150,7 +146,7 @@ def _save_all_data(
 ):
     """Save all metrics in organized manner."""
     # Get stacked metrics
-    stacked = metrics.get_stacked_metrics(device=exp_cfg.device)
+    stacked = metrics.get_stacked_metrics()
 
     # Add final context
     stacked["x_ctx"] = x_ctx.detach().cpu()
@@ -167,58 +163,6 @@ def _save_all_data(
             log=log,
         )
 
-    # Save query trajectories
-    if metrics.x_queries_list:
-        x_queries_concat = torch.cat(
-            metrics.x_queries_list, dim=1
-        )  # [B, num_steps*q, dx]
-        save_data(
-            data=x_queries_concat,
-            path=data_save_path,
-            config=opt_cfg,
-            filename="x_queries",
-            override=exp_cfg.override,
-            log=log,
-        )
-
-    if metrics.y_queries_list:
-        y_queries_concat = torch.cat(
-            metrics.y_queries_list, dim=1
-        )  # [B, num_steps*q, dy]
-        save_data(
-            data=y_queries_concat,
-            path=data_save_path,
-            config=opt_cfg,
-            filename="y_queries",
-            override=exp_cfg.override,
-            log=log,
-        )
-
-    # Save mask history
-    if metrics.y_mask_history:
-        y_mask_history_stack = torch.stack(
-            metrics.y_mask_history, dim=0
-        )  # [num_steps, dy]
-        save_data(
-            data=y_mask_history_stack,
-            path=data_save_path,
-            config=opt_cfg,
-            filename="y_mask_history",
-            override=exp_cfg.override,
-            log=log,
-        )
-
-    # Save auxiliary data (acquisition values)
-    if any(acq is not None for acq in metrics.acq_values_list):
-        save_data(
-            data=metrics.acq_values_list,
-            path=data_save_path,
-            config=opt_cfg,
-            filename="acq_values",
-            override=exp_cfg.override,
-            log=log,
-        )
-
 
 def _save_all_plots(
     metrics: MetricTracker,
@@ -228,7 +172,7 @@ def _save_all_plots(
     log: callable,
 ):
     """Generate and save all optimization plots."""
-    stacked = metrics.get_stacked_metrics(device=exp_cfg.device)
+    stacked = metrics.get_stacked_metrics()
     batch_size = opt_cfg.batch_size
 
     for b in range(batch_size):
@@ -258,14 +202,9 @@ def _save_all_plots(
         }
 
         # Add prediction plots if available
-        if "nll_c" in stacked:
+        if "nll_t" in stacked:
             plots.update(
                 {
-                    "nll_c": plot_1d(
-                        y_vals=stacked["nll_c"],
-                        title="NLL Context over Iterations",
-                        ylabel="NLL Context",
-                    ),
                     "nll_t": plot_1d(
                         y_vals=stacked["nll_t"],
                         title="NLL Target over Iterations",
@@ -339,7 +278,7 @@ def evaluate_optimization(
         Model pre-trained on y_range: {model_y_range}"""
     )
 
-    res = run_optimization(
+    run_optimization(
         model=model,
         test_function=test_function,
         model_x_range=model_x_range,
@@ -353,15 +292,6 @@ def evaluate_optimization(
         data_save_path=data_save_path,
         log=log,
     )
-
-    log(f"--- Metrics summary ---")
-    for key, item in res.items():
-        if isinstance(item, list):
-            if item:  # list of tensor [B,]
-                log(f"{key}: {item[-1]}")
-
-    gc.collect()
-    torch.cuda.empty_cache()
 
 
 def run_prediction_on_test_function(
@@ -384,39 +314,29 @@ def run_prediction_on_test_function(
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Dict[str, Any]]]:
     """Evaluate model predictions at a single optimization step.
 
-    This function samples target points from the test function, evaluates the model's
-    predictive performance on both context and target sets, and optionally generates
-    visualization plots.
+    Samples target points from the test function, evaluates predictive performance
+    on context and target sets, and optionally generates visualization plots.
 
     Args:
-        test_function: Test function to sample from and evaluate
+        test_function: Test function to sample from
         model: TAMO model
-        x_ctx: Context input points [batch_size, num_ctx, x_dim]
-        y_ctx: Context output values [batch_size, num_ctx, y_dim]
+        x_ctx: Context inputs [batch, num_ctx, x_dim]
+        y_ctx: Context outputs [batch, num_ctx, y_dim]
         x_mask: Input dimension mask [x_dim]
         y_mask: Observed output dimension mask [y_dim]
         y_mask_tar: Target output dimension mask [y_dim]
-        train_x_range: Input bounds used during model training
-        train_y_range: Output bounds used during model training
+        train_x_range: Input bounds used during training
+        train_y_range: Output bounds used during training
         batch_size: Number of parallel evaluations
         read_cache: Whether to read from prediction cache
-        num_subspace_points: Number of points to sample in subspace (default: 500)
-        sigma: Observation noise level (currently unused, kept for API compatibility)
+        num_subspace_points: Points to sample in subspace (default: 500)
+        sigma: Observation noise (unused, kept for API compatibility)
         plot_enabled: Whether to generate prediction plots
-        y_mask_history: History of observed masks [num_steps, y_dim], used for plotting
+        y_mask_history: History of observed masks [num_steps, y_dim], for plotting
         seed: Random seed for reproducible sampling
 
     Returns:
-        Tuple containing:
-            - nll_c: Negative log-likelihood on context (placeholder: -1.0)
-            - nll_t: Negative log-likelihood on target points
-            - mse_c: Mean squared error on context per dimension (placeholder: -1.0)
-            - mse_t: Mean squared error on target points per dimension
-            - figs: Dictionary with 'mean' and 'std' plots, or None if plot_enabled=False
-
-    Note:
-        Context metrics (nll_c, mse_c) are currently placeholders and not computed.
-        This is intentional to focus computational resources on target prediction.
+        (nll_t, mse_t, figs)
     """
     device = x_mask.device
 
@@ -447,7 +367,7 @@ def run_prediction_on_test_function(
     y_mask_tar_exp = repeat(y_mask_tar, "d -> b d", b=batch_size)
 
     # Step 4: Compute prediction metrics on target points
-    nll_t, mse_t, _, _ = prediction_forward(
+    nll_t, mse_t, _ = prediction_forward(
         model=model,
         x_ctx=x_ctx,
         x_tar=x_tar,
@@ -459,14 +379,10 @@ def run_prediction_on_test_function(
         read_cache=read_cache,
     )
 
-    # Placeholder context metrics
-    nll_c = torch.tensor([PLACEHOLDER_NLL_VALUE], device=device)
-    mse_c = torch.full((test_function.y_dim,), PLACEHOLDER_NLL_VALUE, device=device)
-
     # Step 5: Generate plots if requested
     figs = None
     if plot_enabled:
-        figs = _generate_prediction_plots(
+        figs = _generate_visualizations(
             model=model,
             x_ctx=x_ctx,
             y_ctx_scaled=y_ctx_scaled,
@@ -476,14 +392,13 @@ def run_prediction_on_test_function(
             y_mask_exp=y_mask_exp,
             y_mask_tar_exp=y_mask_tar_exp,
             y_mask_history=y_mask_history,
-            test_function=test_function,
             read_cache=read_cache,
         )
 
-    return nll_c, nll_t, mse_c, mse_t, figs
+    return nll_t, mse_t, figs
 
 
-def _generate_prediction_plots(
+def _generate_visualizations(
     model: TAMO,
     x_ctx: Tensor,
     y_ctx_scaled: Tensor,
@@ -492,11 +407,10 @@ def _generate_prediction_plots(
     x_mask_exp: Tensor,
     y_mask_exp: Tensor,
     y_mask_tar_exp: Tensor,
-    y_mask_history: Optional[Tensor],
-    test_function: TestFunction,
     read_cache: bool,
+    y_mask_history: Optional[Tensor] = None,
 ) -> Dict[str, Any]:
-    """Generate prediction visualization plots for mean and standard deviation.
+    """Generate prediction visualizations.
 
     Args:
         model: TAMO model
@@ -580,9 +494,8 @@ def _should_plot(
 
 def _save_prediction_plots(
     figs: Dict[str, Any],
-    states: States,
+    observation_tracker: ObservationTracker,
     x_ctx: Tensor,
-    nll_c: Tensor,
     nll_t: Tensor,
     T: int,
     plot_save_path: str,
@@ -597,9 +510,8 @@ def _save_prediction_plots(
 
     Args:
         figs: Dictionary of matplotlib figures to save
-        states: Optimization state tracker
+        observation_tracker: Observed mask and cost tracker
         x_ctx: Context inputs for determining context size
-        nll_c: Context negative log-likelihood for filename
         nll_t: Target negative log-likelihood for filename
         T: Total optimization budget
         plot_save_path: Directory to save plots
@@ -608,25 +520,24 @@ def _save_prediction_plots(
         log: Logging function
     """
     # Extract observed dimension indices as strings
-    observed_x_dims = states.x_mask.nonzero(as_tuple=False)[:, 0].tolist()
-    observed_y_dims = states.y_mask.nonzero(as_tuple=False)[:, 0].tolist()
+    observed_x_dims = observation_tracker.x_mask.nonzero(as_tuple=False)[:, 0].tolist()
+    observed_y_dims = observation_tracker.y_mask.nonzero(as_tuple=False)[:, 0].tolist()
 
     x_dims_str = "".join(map(str, observed_x_dims))
     y_dims_str = "".join(map(str, observed_y_dims))
 
     # Compute mean NLL values for filename
-    nll_c_mean = nll_c.detach().mean().item()
     nll_t_mean = nll_t.detach().mean().item()
 
     # Generate descriptive filename prefix
     # Format: context_dx{dims}dy{dims}_nc{count}_t{current}T{total}_nllc{value}nllt{value}
     count = x_ctx.shape[1]
-    current = states.get_cost_used()
+    current = observation_tracker.get_cost_used()
     filename_prefix = (
         f"context_dx{x_dims_str}dy{y_dims_str}_"
         f"nc{count}_"
         f"t{current}T{T}_"
-        f"nllc{nll_c_mean}nllt{nll_t_mean}"
+        f"nll{nll_t_mean}"
     )
 
     # Save each figure with the prefix
@@ -670,7 +581,7 @@ def run_optimization(
     # ------------------------------------------------------------------
     # Dimension and cost state tracker
     # ------------------------------------------------------------------
-    states = States(
+    observation_tracker = ObservationTracker(
         x_dim=test_function.x_dim,
         y_dim=test_function.y_dim,
         dim_mask_gen_mode=opt_cfg.dim_mask_gen_mode,
@@ -705,7 +616,7 @@ def run_optimization(
         x_query=x_ctx,
         y_query=y_ctx,
     )
-    logger.log_step(step=0, states=states, metrics=metrics)
+    logger.log_step(step=0, observation_tracker=observation_tracker, metrics=metrics)
 
     q_chunk, q_chunk_mask, logit_mask = None, None, None
 
@@ -721,51 +632,45 @@ def run_optimization(
     model = model.to(exp_cfg.device)
     model.eval()
     with torch.no_grad():
-        while states.get_cost_used() <= T:
+        while observation_tracker.get_cost_used() <= T:
             # Perform prediction evaluation
             if predict:
                 should_plot_now = _should_plot(
-                    cost_used=states.get_cost_used(),
+                    cost_used=observation_tracker.get_cost_used(),
                     cost_total=T,
                     plot_per_n_unit_cost=log_cfg.plot_per_n_steps,
                     plot_enabled=log_cfg.plot_enabled,
-                    init_cost=states.initial_cost,
+                    init_cost=observation_tracker.initial_cost,
                 )
 
-                nll_c, nll_t, mse_c, mse_t, figs = run_prediction_on_test_function(
+                nll_t, mse_t, figs = run_prediction_on_test_function(
                     test_function=test_function,
                     model=model,
                     x_ctx=x_ctx,
                     y_ctx=y_ctx,
-                    x_mask=states.x_mask,
-                    y_mask=states.y_mask,
-                    y_mask_tar=states.y_mask_target,
+                    x_mask=observation_tracker.x_mask,
+                    y_mask=observation_tracker.y_mask,
+                    y_mask_tar=observation_tracker.y_mask_target,
                     train_x_range=model_x_range,
                     train_y_range=model_y_range,
                     batch_size=opt_cfg.batch_size,
                     read_cache=pred_cfg.read_cache,
                     sigma=data_cfg.sigma,
                     plot_enabled=should_plot_now,
-                    y_mask_history=states.y_mask_observed,
+                    y_mask_history=observation_tracker.y_mask_observed,
                     seed=exp_cfg.seed,
                 )
 
-                nll_c = nll_c.detach()
                 nll_t = nll_t.detach()
-                mse_c = mse_c.detach()
                 mse_t = mse_t.detach()
 
                 # Update prediction metrics
-                metrics.add_prediction_step(
-                    nll_c=nll_c, nll_t=nll_t, mse_c=mse_c, mse_t=mse_t
-                )
+                metrics.add_prediction_step(nll_t=nll_t, mse_t=mse_t)
 
                 # Log prediction results
                 logger.log_prediction_step(
-                    step=states.get_cost_used(),
-                    nll_c=nll_c,
+                    step=observation_tracker.get_cost_used(),
                     nll_t=nll_t,
-                    mse_c=mse_c,
                     mse_t=mse_t,
                 )
 
@@ -773,9 +678,8 @@ def run_optimization(
                 if figs is not None:
                     _save_prediction_plots(
                         figs=figs,
-                        states=states,
+                        observation_tracker=observation_tracker,
                         x_ctx=x_ctx,
-                        nll_c=nll_c,
                         nll_t=nll_t,
                         T=T,
                         plot_save_path=plot_save_path,
@@ -806,10 +710,10 @@ def run_optimization(
                     x_ctx=batch_x_ctx,
                     y_ctx=batch_y_ctx,
                     model=model,
-                    states=states,
+                    observation_tracker=observation_tracker,
                     model_x_range=model_x_range,
-                    opt_cfg=opt_cfg,
-                    pred_cfg=pred_cfg,
+                    opt_config=opt_cfg,
+                    pred_config=pred_cfg,
                     d=d,
                     T=T,
                     query_chunks=q_chunk,
@@ -818,13 +722,13 @@ def run_optimization(
                 )
 
                 # Update batch records
-                x_next = action_res[0]
-                acq_values = action_res[4]  # [B, n, d]
-                entropy = action_res[3]
-                q_chunk = action_res[5]
-                q_chunk_mask = action_res[6]
-                infer_time = action_res[7]
-                logit_mask = action_res[8]
+                x_next = action_res.next_x
+                acq_values = action_res.logits  # [B, n, d]
+                entropy = action_res.entropy
+                q_chunk = action_res.q_chunk
+                q_chunk_mask = action_res.q_chunk_mask
+                infer_time = action_res.infer_time
+                logit_mask = action_res.logit_mask
 
                 # [Tensor | scalar] x q
                 batch_x_next_list.append(x_next)
@@ -832,7 +736,7 @@ def run_optimization(
                 batch_infer_time_list.append(infer_time)
 
                 # update mask only after last query in the batch
-                states.step(update_mask=(qi == opt_cfg.q - 1))
+                observation_tracker.step(update_mask=(qi == opt_cfg.q - 1))
 
             # Concatenate batch query points
             batch_x_next = torch.cat(batch_x_next_list, dim=1)  # [B, q, max_x_dim]
@@ -851,7 +755,7 @@ def run_optimization(
             batch_y_next = y_ctx[:, -opt_cfg.q :]  # [B, q, dy]
 
             hv_next = test_function.compute_hv(
-                solutions=batch_y_next, y_mask=states.y_mask_target
+                solutions=batch_y_next, y_mask=observation_tracker.y_mask_target
             )
 
             # Add optimization step metrics
@@ -864,32 +768,28 @@ def run_optimization(
                 time=batch_infer_time_list,
                 x_query=batch_x_next,
                 y_query=batch_y_next,
-                acq_values=acq_values,
             )
 
             # Log current step
-            logger.log_step(step=states.get_cost_used(), states=states, metrics=metrics)
+            logger.log_step(step=observation_tracker.get_cost_used(), observation_tracker=observation_tracker, metrics=metrics)
 
             if acq_values is not None and _should_plot(
-                states.get_cost_used(),
+                observation_tracker.get_cost_used(),
                 T,
                 log_cfg.plot_per_n_steps,
                 log_cfg.plot_enabled,
-                states.initial_cost,
+                observation_tracker.initial_cost,
             ):
                 acq_fig = plot_acq_values(q_chunk=q_chunk, acq_values=acq_values)
                 save_fig(
                     acq_fig,
                     plot_save_path,
                     config=opt_cfg,
-                    filename=f"acq_heatmap_t{states.get_cost_used()}_T{T}",
+                    filename=f"acq_heatmap_t{observation_tracker.get_cost_used()}_T{T}",
                     override=exp_cfg.override,
                     log=log,
                     log_to_wandb=exp_cfg.log_to_wandb,
                 )
-
-    # Record final mask history: [budget, dy]
-    metrics.y_mask_history.append(states.y_mask_observed.detach().cpu())
 
     # Log summary statistics
     logger.log_summary(metrics=metrics, test_function=test_function)
@@ -915,39 +815,8 @@ def run_optimization(
             log=log,
         )
 
-    # Create backward-compatible return dictionary
-    stacked = metrics.get_stacked_metrics(device=exp_cfg.device)
-    result_dict = {
-        "hpvs_list": [stacked["hv"][:, i] for i in range(stacked["hv"].shape[1])],
-        "hpvs_queries_list": [
-            stacked["instant_hv"][:, i] for i in range(stacked["instant_hv"].shape[1])
-        ],
-        "regr_list": [
-            stacked["regret"][:, i] for i in range(stacked["regret"].shape[1])
-        ],
-        "entr_list": [
-            stacked["entropy"][:, i] for i in range(stacked["entropy"].shape[1])
-        ],
-        "time_list": metrics.time_list,
-        "x_queries_list": metrics.x_queries_list,
-        "y_queries_list": metrics.y_queries_list,
-        "y_mask_history": metrics.y_mask_history,
-        "acq_values_list": metrics.acq_values_list,
-    }
-
-    if predict:
-        result_dict.update(
-            {
-                "nll_c_list": metrics.nll_c_list,
-                "nll_t_list": metrics.nll_t_list,
-                "mse_c_list": metrics.mse_c_list,
-                "mse_t_list": metrics.mse_t_list,
-            }
-        )
-
     del x_ctx, y_ctx
     del q_chunk, q_chunk_mask, logit_mask
-    return result_dict
 
 
 def evaluate_prediction(
@@ -994,10 +863,6 @@ def evaluate_prediction(
             prefetch_factor=prefetch_factor,
             log=log,
         )
-
-        del dataset
-        gc.collect()
-        torch.cuda.empty_cache()
 
 
 def run_prediction(
@@ -1050,7 +915,7 @@ def run_prediction(
             )
 
             # Predict on context
-            nll_c, mse_c, _, _ = prediction_forward(
+            nll_c, mse_c, _ = prediction_forward(
                 model=model,
                 x_ctx=x[:, :nc],
                 y_ctx=y[:, :nc],
@@ -1062,7 +927,7 @@ def run_prediction(
             )
 
             # Predict on target
-            nll_t, mse_t, _, _ = prediction_forward(
+            nll_t, mse_t, _ = prediction_forward(
                 model=model,
                 x_ctx=x[:, :nc],
                 y_ctx=y[:, :nc],
@@ -1116,9 +981,6 @@ def run_prediction(
                         log_to_wandb=exp_cfg.log_to_wandb,
                     )
 
-                gc.collect()
-                torch.cuda.empty_cache()
-
     # Log results
     line = f"[results, seed={exp_cfg.seed}]\n" f"{ravg.info()}"
     log(line)
@@ -1130,6 +992,3 @@ def run_prediction(
                 "eval/nll_target": ravg.get("nll_target"),
             }
         )
-    del dataloader
-    gc.collect()
-    torch.cuda.empty_cache()

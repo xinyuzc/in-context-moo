@@ -210,7 +210,7 @@ def build_dataloader(
     dataloader = StatefulDataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=False,  # To enable batch idx resume
+        shuffle=split=="train",
         generator=torch.Generator(device="cpu"),
         pin_memory=(device != "cpu"),
         num_workers=num_workers,

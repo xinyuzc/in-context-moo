@@ -58,8 +58,8 @@ class DimensionWiseEmbedder(nn.Module):
         self, x: Tensor, observed_x_mask: Optional[Tensor], B: int, N: int, dx_max: int
     ) -> Tensor:
         """Returns x_emb [B, N, dx_max, dim_mlp]"""
-        x = x.view(B * N * dx_max, 1)
-        x_emb = self.mlp_x(x).view(B, N, dx_max, self.dim_mlp)
+        x = x.reshape(B * N * dx_max, 1)
+        x_emb = self.mlp_x(x).reshape(B, N, dx_max, self.dim_mlp)
 
         if observed_x_mask is not None:
             x_emb = self._fill_missing_values(
@@ -82,8 +82,8 @@ class DimensionWiseEmbedder(nn.Module):
             return self.missing_y_marker.expand(B, N, dy_max, self.dim_mlp)
         else:
             # Embed values
-            y = y.view(B * N * dy_max, 1)
-            y_emb = self.mlp_y(y).view(B, N, dy_max, self.dim_mlp)
+            y = y.reshape(B * N * dy_max, 1)
+            y_emb = self.mlp_y(y).reshape(B, N, dy_max, self.dim_mlp)
 
             # Fill missing values if mask is provided
             if observed_y_mask is not None:

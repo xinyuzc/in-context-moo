@@ -2,6 +2,8 @@
 
 This repository contains the official implementation of the ICLR 2026 paper: [In-Context Multi-Objective Optimization](https://openreview.net/forum?id=odmeUlWta8).
 
+![Full Architecture of TAMO](architecture.png)
+
 ## Installation
 
 1. Clone the repository
@@ -10,21 +12,28 @@ This repository contains the official implementation of the ICLR 2026 paper: [In
     conda env create --file environment.yml
     conda activate tamo
    ``` 
+3. To enable wandb, create `.env` and add your `WANDB_API_KEY` and `WANDB_DATA_DIR` there
 
 ## Structure
-- `model/`: TAMO architecture
-- `data/`: Environment and data relevant utilities
 - `configs/`: Configuration yaml files
-- `utils/`: Utilities
-- `results/`: experiment results
-- `datasets/`: synthetic dataset for training or evaluation
-
-## Examples 
-Check `notebooks/` for examples of use and visualizations.
+- `data/`: Environment and data relevant utilities
+- `datasets/`: Generated synthetic dataset
+- `model/`: TAMO architecture
+- `results/`: Experimental results and model checkpoints
+- `utils/`: Util functions
+- `test.py`: Testing script
+- `train.py`: Training script
+- `generate_data.py`: Synthetic data generating script
+  
+## Examples of usage 
+#### Notebooks
+Check `notebooks/` for examples of usage and visualizations, where: 
+1. `example.ipynb` shows how to create test environment, how TAMO predicts, and util functions to plot TAMO optimization results.
+2. `synthetic_data.ipynb` shows how to load generated dataset or online generate synthetic data.
 
 ## How to start
-### Generate synthetic data before training
-TAMO is trained on pre-generated datasets for efficiency. To generate data:
+### Generate synthetic dataset before training
+TAMO is trained on pre-generated synthetic datasets for efficiency. To generate $100000$ dataset containing $300$ datapoints with $d_x=1, d_y=1$ for training:
 ```bash
 python generate_data.py  --config-name=generate_data \
     experiment.mode=train \
@@ -36,34 +45,45 @@ python generate_data.py  --config-name=generate_data \
     generate.num_datasets=100000 \
     generate.num_datapoints=300 
 ```
+Dataset will be saved at `datasets/train/x_dim_1/y_dim_1/gp_0.hdf5`. Note that dataset can be alternatively saved under `datasets/{data.data_id}/train/x_dim_1/y_dim_1/gp_0.hdf5` by assigning valid values to `data.data_id`. This could be useful if you would like to try different priors.
+
 Check all available arguments in `configs/generate_data.yaml`. 
 
-Dataset will be saved at `datasets/train/x_dim_1/y_dim_1/gp_0.hdf5`. Note that dataset can be alternatively saved under `datasets/{data.data_id}/train/x_dim_1/y_dim_1/gp_0.hdf5` and used for training by assigning valid values to `data.data_id`. This could be useful if you would like to try different priors.
-
 ### Train 
-To run training script (`train.py`): 
+TO train TAMO on dimensions $d_x\in \{1,2\}, d_y \in \{1,2,3\}$: 
 ```
-python train.py --config-name=train experiment.expid=[EXPID]
+python train.py --config-name=train \
+experiment.expid=[EXPID] \
+data.x_dim_list=[1,2] \
+data.y_dim_list=[1,2,3] \
+train.num_total_epochs=400000 \
+train.num_burnin_epochs=393500
 ```
 Check all avaialable arguments in `configs/train.yaml`.
 
 ### Evaluation 
-To run test script (`test.py`): 
+To test trained TAMO on GP data with $d_x=2, d_y=2$: 
 ```
-python test.py --config-name=test experiment.expid=[EXPID]
+python test.py --config-name=test experiment.expid=[EXPID] data.function_name=dx2_dy2
 ```
 Check all available arguments in `configs/test.yaml`.
 
 #### Test functions
-`data/function.py` implements test function class, where: 
+`data/function.py` implements test function classes, where: 
 - `SyntheticFunction`: environment based on botorch function.
 - `IntepolatorFunction`: environment based on the linear interpolation of dataset. 
 
-These environments enable: a) evaluating the function at certain inputs, b) sampling from the function, c) computing hypervolume, d) computing regrets. Some core functions: 
+These environments enable: 
+1. Evaluating the function at certain inputs
+2. Sampling from the function
+3. Computing hypervolume
+4. Computing regrets
+
+Some core functions: 
 - `init()`: Sample initial observations.
-- `sample()`: Sample datapoints from the underlying function.
-- `transform_outputs()`: Transform function values for TAMO.
-- `step()`: update observations and compute hypervolume and regrets so far.
+- `sample()`: Sample from the function.
+- `transform_outputs()`: **Transform function values for TAMO**.
+- `step()`: update observations, compute hypervolume and regrets on all observations.
 
 #### Results 
 Metrics and plots will be saved under `results/data` and `results/plots` respectively.

@@ -5,7 +5,7 @@ defaults:
   - _self_
 
 experiment:
-  seed: 0
+  seed: null
   mode: train
   model_name: TAMO
   device: cuda
@@ -16,7 +16,7 @@ experiment:
 
 train:
   num_total_epochs: 400000
-  num_burnin_epochs: 395000
+  num_burnin_epochs: 392000
   nc_burnin_ratio: 0.8
   lr1: 1e-3
   lr2: 4e-5
@@ -26,7 +26,6 @@ train:
   num_warmup_steps: null
   num_workers: 2
   prefetch_factor: 2
-  num_repeat_data: 2
 
 loss:
   use_cumulative_rewards: true

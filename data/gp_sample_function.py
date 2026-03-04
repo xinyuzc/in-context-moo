@@ -1,4 +1,9 @@
-"""Discrete function environment built on batched GP samples."""
+"""Create *discrete* environment based on batched GP samples.
+
+Key functions:
+    1. init(): Sample initial observations
+    2. step(): Evaluate function at new inputs, update context, compute hypervolume and regret
+"""
 
 import random
 from typing import Optional, List, Tuple, Union
@@ -86,7 +91,7 @@ def prepare_prediction_batches(
     yc = y[:, idx1]
     xt = x[:, idx2]
     yt = y[:, idx2]
-    
+
     return xc, yc, xt, yt, x_mask, y_mask
 
 
@@ -101,7 +106,7 @@ class GPSampleFunction:
         batch_size: int,
         d: int,
         use_grid_sampling: bool,
-        use_factorize_policy: bool,
+        use_factorized_policy: bool,
         x_dim: Optional[int] = None,
         y_dim: Optional[int] = None,
         num_samples: int = NUM_SAMPLES,
@@ -109,7 +114,7 @@ class GPSampleFunction:
         restore_full_dim_later: bool = True,
         **kwargs,
     ):
-        assert not use_factorize_policy, "use_factorize_policy=True is not supported."
+        assert not use_factorized_policy, "use_factorize_policy=True is not supported."
         # Randomly sample x and y dim if not specified
         x_dim = random.choice(data_config.x_dim_list) if x_dim is None else x_dim
         y_dim = random.choice(data_config.y_dim_list) if y_dim is None else y_dim
@@ -123,7 +128,7 @@ class GPSampleFunction:
             batch_size=batch_size,
             d=d,
             use_grid_sampling=use_grid_sampling,
-            use_factorized_policy=False,
+            use_factorized_policy=use_factorized_policy,
             x_range=data_config.x_range,
             sampler_list=data_config.sampler_list,
             sampler_weights=data_config.sampler_weights,
@@ -497,13 +502,13 @@ class GPSampleFunction:
 
         return x_ctx, y_ctx, reward, regret
 
+
 if __name__ == "__main__":
     device = "cpu"
 
     # ── Test 1: repeat_along_batch ──────────────────────────────────
     print("Test 1: repeat_along_batch")
-    t = torch.tensor([[[1.0, 2.0], [3.0, 4.0]],
-                       [[5.0, 6.0], [7.0, 8.0]]])  # [2, 2, 2]
+    t = torch.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]])  # [2, 2, 2]
     out = GPSampleFunction.repeat_along_batch(t, num_repeat=3)
     assert out.shape == (6, 2, 2), f"Expected (6,2,2), got {out.shape}"
     # Batch 0 repeats 3 times, then batch 1 repeats 3 times
@@ -551,7 +556,11 @@ if __name__ == "__main__":
     gathered_masked = GPSampleFunction.batch_gather(
         tensor, dim=1, index=index, full_dim_mask=mask
     )
-    assert gathered_masked.shape == (2, 2, 5), f"Expected (2,2,5), got {gathered_masked.shape}"
+    assert gathered_masked.shape == (
+        2,
+        2,
+        5,
+    ), f"Expected (2,2,5), got {gathered_masked.shape}"
     # Masked-out dims should be zero
     assert (gathered_masked[:, :, 1] == 0).all()
     assert (gathered_masked[:, :, 3] == 0).all()
@@ -575,10 +584,13 @@ if __name__ == "__main__":
     x = torch.randn(B, N, max_x_dim)
     y = torch.randn(B, N, max_y_dim)
     xc, yc, xt, yt, x_mask, y_mask = prepare_prediction_batches(
-        x=x, y=y,
-        valid_x_counts=3, valid_y_counts=2,
+        x=x,
+        y=y,
+        valid_x_counts=3,
+        valid_y_counts=2,
         dim_scatter_mode="top_k",
-        min_nc=2, max_nc=10,
+        min_nc=2,
+        max_nc=10,
         nc_fixed=5,
     )
     assert xc.shape == (B, 5, max_x_dim), f"xc shape: {xc.shape}"
@@ -606,7 +618,7 @@ if __name__ == "__main__":
         batch_size=batch_size,
         d=8,
         use_grid_sampling=True,
-        use_factorize_policy=False,
+        use_factorized_policy=False,
         x_dim=2,
         y_dim=2,
         num_samples=1,

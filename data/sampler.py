@@ -429,23 +429,29 @@ def gp_sampler(
 
         # Sample until y values are valid (no NaNs or Infs): [M, y_dim]
         while True:
-            _, y = sampler_func(
-                x=x[b],
-                x_range=x_range_t,
-                x_dim=x_dim,
-                num_datapoints=N,
-                num_tasks=y_dim,
-                data_kernel_type_list=data_kernel_type_list,
-                sample_kernel_weights=sample_kernel_weights,
-                lengthscale_range=lengthscale_range,
-                std_range=std_range,
-                min_rank=min_rank,
-                max_rank=max_rank,
-                p_iso=p_iso,
-                jitter=jitter,
-                max_tries=max_tries,
-                device=device,
-            )
+            try:
+                _, y = sampler_func(
+                    x=x[b],
+                    x_range=x_range_t,
+                    x_dim=x_dim,
+                    num_datapoints=N,
+                    num_tasks=y_dim,
+                    data_kernel_type_list=data_kernel_type_list,
+                    sample_kernel_weights=sample_kernel_weights,
+                    lengthscale_range=lengthscale_range,
+                    std_range=std_range,
+                    min_rank=min_rank,
+                    max_rank=max_rank,
+                    p_iso=p_iso,
+                    jitter=jitter,
+                    max_tries=max_tries,
+                    device=device,
+                )
+            except Exception:
+                # Cholesky decomposition can fail on ill-conditioned kernels
+                # (NotPosDefError or CUDA segfault-prone errors); retry with
+                # freshly sampled kernel parameters.
+                continue
 
             if not torch.isnan(y).any() and not torch.isinf(y).any():
                 break
