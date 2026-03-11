@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Normal
 from torch import Tensor
 from typing import Tuple, Optional, NamedTuple
 
@@ -133,7 +134,7 @@ class GMMPredictionHead(nn.Module):
 
             # Stack and reshape
             outputs_cat = torch.stack(outputs).movedim(0, -1).flatten(-2, -1)
-            outputs_cat = outputs_cat.view(B, DY, N, -1)
+            outputs_cat = outputs_cat.reshape(B, DY, N, -1)
 
             # Apply y_mask
             y_mask_expanded = y_mask.unsqueeze(-1).unsqueeze(-1).expand_as(outputs_cat)
@@ -231,26 +232,23 @@ class GMMPredictionHead(nn.Module):
         Returns:
             [B, N, DY] log probabilities
         """
-        import math
-
         means = output.means  # [B, N, DY, K]
         stds = output.stds  # [B, N, DY, K]
         weights = output.weights  # [B, N, DY, K]
 
         # Expand target: [B, N, DY] -> [B, N, DY, 1]
-        target = target.unsqueeze(-1)
+        target = target.reshape(means.shape[:-1] + (1,))  # [..., DY, 1]
 
-        # Log probability under each Gaussian component
-        # log N(y|μ,σ) = -0.5 * (log(2π) + 2*log(σ) + ((y-μ)/σ)²)
-        var = stds**2
-        log_component = -0.5 * (
-            math.log(2 * math.pi) + torch.log(var) + (target - means) ** 2 / var
-        )  # [B, N, DY, K]
+        # Compute log probabilities for each component
+        components = Normal(means, stds, validate_args=False)  # [..., DY, K]
+        log_probs = components.log_prob(target)  # [..., DY, K]
 
-        # Add log weights and logsumexp
-        log_weights = torch.log(weights + 1e-10)  # Numerical stability
-        log_prob = torch.logsumexp(log_weights + log_component, dim=-1)  # [B, N, DY]
+        # Weight log probabilities by mixture weights
+        weights = weights.clamp(min=1e-6)  # Avoid non-positive weights
+        weighted_log_probs = log_probs + torch.log(weights)
 
+        # Log-sum-exp over components to get total log likelihood
+        log_prob = torch.logsumexp(weighted_log_probs, dim=-1)  # [..., DY]
         return log_prob
 
     @staticmethod
@@ -274,7 +272,7 @@ class GMMPredictionHead(nn.Module):
         nll = -log_p
 
         return nll
-    
+
     @staticmethod
     def sample(output: GMMOutput, n_samples: int = 1) -> Tensor:
         """Sample from the GMM.
@@ -311,7 +309,7 @@ class GMMPredictionHead(nn.Module):
         # Reshape weights for multinomial: [B*N*DY, K]
         weights_flat = weights_clean.reshape(-1, K)
         indices = torch.multinomial(weights_flat, n_samples, replacement=True)
-        indices = indices.view(B, N, DY, n_samples)  # [B, N, DY, n_samples]
+        indices = indices.reshape(B, N, DY, n_samples)  # [B, N, DY, n_samples]
 
         # Gather means and stds for selected components
         # Expand indices for gathering: [B, N, DY, n_samples]

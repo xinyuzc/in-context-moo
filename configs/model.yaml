@@ -13,7 +13,7 @@ model:
   depth: 3
   num_components: 20
   use_ar: false 
-  std_min: 1e-4
+  std_min: 1e-3
   std_max: 1.0
   single_mlp: false
   use_missing_marker: false 

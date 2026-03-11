@@ -340,10 +340,10 @@ class Decoder(nn.Module):
         # Gather selected x: (B * n_query_spaces, 1, dx_max) -> (B, n_query_spaces, dx_max)
 
         x = self._gather_seq_ele(
-            query_chunks.view(B * n_query_spaces, n_cand, -1),
+            query_chunks.reshape(B * n_query_spaces, n_cand, -1),
             indices.reshape(B * n_query_spaces, -1),
         )
-        x = x.squeeze(1).view(B, n_query_spaces, -1)
+        x = x.squeeze(1).reshape(B, n_query_spaces, -1)
 
         # Zero out invalid dimensions and sum: (B, 1, dx_max)
         x *= query_x_mask.float()
@@ -468,10 +468,10 @@ class Decoder(nn.Module):
         indices, logp, entropy = self._sample(logits, epsilon, logit_mask)
 
         return (
-            indices.view(B, n_query_spaces),
-            logp.view(B, n_query_spaces),
-            entropy.view(B, n_query_spaces),
-            logits.view(B, n_query_spaces, n_cand) if return_logits else None,
+            indices.reshape(B, n_query_spaces),
+            logp.reshape(B, n_query_spaces),
+            entropy.reshape(B, n_query_spaces),
+            logits.reshape(B, n_query_spaces, n_cand) if return_logits else None,
         )
 
     def _unpermute_results(

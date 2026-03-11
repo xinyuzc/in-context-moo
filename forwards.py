@@ -196,9 +196,9 @@ def _mask_out_used_chunks(
     # TODO
     assert n == 1, f"Only support full policy (n=1) for now"
 
-    logit_mask = logit_mask.bool().view(B * n, -1)  # [B * n, d]
-    logit_mask[torch.arange(B * n), used_indices.view(-1)] = False
-    return logit_mask.view(B, n, d)
+    logit_mask = logit_mask.bool().reshape(B * n, -1)  # [B * n, d]
+    logit_mask[torch.arange(B * n), used_indices.reshape(-1)] = False
+    return logit_mask.reshape(B, n, d)
 
 
 def select_next_query(
@@ -316,10 +316,10 @@ def select_next_query(
     logits = results[4] if len(results) > 4 else None
 
     # Reshape to expected dimensions
-    next_x = next_x_raw.view(B, 1, dx_max).detach()
-    chunk_indices = indices_raw.view(B, n).detach()
-    chunk_logp = logp_raw.view(B, n)  # Keep gradients
-    chunk_entropy = entropy_raw.view(B, n)  # Keep gradients
+    next_x = next_x_raw.reshape(B, 1, dx_max).detach()
+    chunk_indices = indices_raw.reshape(B, n).detach()
+    chunk_logp = logp_raw.reshape(B, n)  # Keep gradients
+    chunk_entropy = entropy_raw.reshape(B, n)  # Keep gradients
 
     # Collapse factorized indices to flat indices: [B, n] -> [B]
     indices = factorized_to_flat_index(chunk_indices=chunk_indices, n=n, d=d)

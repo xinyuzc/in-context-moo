@@ -8,11 +8,6 @@ from typing import Dict
 
 import torch
 
-try:
-    from torch.amp import GradScaler
-except ImportError:
-    from torch.cuda.amp import GradScaler
-from torch.amp import autocast
 from omegaconf import DictConfig
 import hydra
 import wandb
@@ -101,6 +96,7 @@ def train(
 ):
     # Set random seed
     set_all_seeds(exp_cfg.seed)
+    log(f"seed:\t{exp_cfg.seed}")
 
     # ===============================================
     # Load checkpoint
@@ -113,7 +109,6 @@ def train(
     model_state_dict = ckpt.get("model", None)
     optimizer_state_dict = ckpt.get("optimizer", None)
     scheduler_state_dict = ckpt.get("scheduler", None)
-    resume_batch_idx = ckpt.get("batch_idx", 0)
 
     # ===============================================
     # Create dataset
@@ -192,11 +187,6 @@ def train(
     if optimizer_state_dict:
         optimizer.load_state_dict(optimizer_state_dict)
 
-        # Ensure initial_lr is set for all param groups
-        for group in optimizer.param_groups:
-            if "initial_lr" not in group:
-                group["initial_lr"] = group["lr"]
-
     log(f"Initializing scheduler...")
     scheduler = build_scheduler(
         optimizer=optimizer,
@@ -212,8 +202,6 @@ def train(
     if scheduler_state_dict:
         scheduler.load_state_dict(scheduler_state_dict)
 
-    log("Using torch.amp.GradScaler for mixed precision training.")
-    scaler = GradScaler()
     ravg = Averager()
 
     # Repeat dataset if number of epochs exceeds
@@ -234,17 +222,6 @@ def train(
             prefetch_factor=train_cfg.prefetch_factor,
         )
         dataloader_iter = iter(dataloader)
-        batch_idx = 0
-
-        # Skip batches already seen before checkpoint
-        # Removed - would be too time consuming when epoch is large
-        # if resume_batch_idx > 0:
-        #     log(f"Skipping {resume_batch_idx} batches to resume position...")
-        #     for _ in range(resume_batch_idx):
-        #         if next(dataloader_iter, None) is None:
-        #             break
-        #         batch_idx += 1
-        #     resume_batch_idx = 0  # Only skip on the first repeat_round
 
         # Start one training epoch
         while epoch < num_total_epochs:
@@ -256,10 +233,11 @@ def train(
                 # NOTE delete dataloader instance before reiniting for memory save
                 del dataloader, dataloader_iter
                 gc.collect()
-                batch_idx = 0
+                torch.cuda.empty_cache()
+
                 break
+
             x, y, valid_x_counts, valid_y_counts = batch
-            batch_idx += 1
             if has_nan_or_inf(x, "x", log) or has_nan_or_inf(y, "y", log):
                 continue
 
@@ -285,6 +263,10 @@ def train(
                     num_training_steps=num_after_burnin_epochs,
                     num_warmup_steps=train_cfg.num_warmup_steps,
                 )
+
+            # Loss curve would change - to avoid confusion!
+            if epoch == num_context_size_burnin_epochs:
+                log(f"Start training on prediction batches of random context size.")
 
             t1 = time.time()
 
@@ -314,74 +296,66 @@ def train(
             # ===============================================
             # Forwards
             # ===============================================
-            with autocast(
-                device_type=exp_cfg.device, enabled=exp_cfg.device == "cuda"
-            ):  # Use AMP only if on GPU
-                # Prediction forward (model + loss)
-                loss_pre, mse_mean, _ = prediction_forward(
+            # Prediction forward (model + loss)
+            loss_pre, mse_mean, _ = prediction_forward(
+                model=model,
+                x_ctx=xc,
+                y_ctx=yc,
+                x_tar=xt,
+                y_tar=yt,
+                x_mask=x_mask,
+                y_mask=y_mask,
+                read_cache=pred_cfg.read_cache,
+            )
+
+            loss_pre_val = loss_pre.detach().item()
+            mse_mean = mse_mean.detach()
+
+            # Prediction loss backward and free up graph
+            if epoch >= num_burnin_epochs:
+                loss_weight = loss_cfg.loss_weight
+            else:
+                loss_weight = 1.0
+
+            (loss_weight * loss_pre).backward()
+
+            del loss_pre
+            del xc, yc, xt, yt
+            del x_mask, y_mask, valid_x_counts, valid_y_counts
+
+            # Optimization forward (model + loss)
+            loss_acq_val = 0.0
+            step_reward_mean = 0.0
+            final_step_reward_mean = 0.0
+            final_step_entropy_mean = 0.0
+            T = 0
+
+            if epoch >= num_burnin_epochs:
+                T = opt_cfg.sample_T()
+                (
+                    loss_acq,
+                    step_reward_mean,
+                    final_step_reward_mean,
+                    final_step_entropy_mean,
+                ) = optimization_forward(
                     model=model,
-                    x_ctx=xc,
-                    y_ctx=yc,
-                    x_tar=xt,
-                    y_tar=yt,
-                    x_mask=x_mask,
-                    y_mask=y_mask,
-                    read_cache=pred_cfg.read_cache,
+                    data_cfg=data_cfg,
+                    opt_config=opt_cfg,
+                    loss_config=loss_cfg,
+                    T=T,
+                    device=exp_cfg.device,
                 )
+                loss_acq_val = loss_acq.detach().item()
 
-                loss_pre_val = loss_pre.detach().item()
-                mse_mean = mse_mean.detach()
+                # optimization loss backward and free up graph
+                loss_acq.backward()
+                del loss_acq
 
-                # Prediction loss backward and free up graph
-                if epoch >= num_burnin_epochs:
-                    loss_weight = loss_cfg.loss_weight
-                else:
-                    loss_weight = 1.0
-
-                scaler.scale(loss_weight * loss_pre).backward()
-
-                del loss_pre
-                del xc, yc, xt, yt
-                del x_mask, y_mask, valid_x_counts, valid_y_counts
-                gc.collect()
-                torch.cuda.empty_cache()
-
-                # Optimization forward (model + loss)
-                loss_acq_val = 0.0
-                step_reward_mean = 0.0
-                final_step_reward_mean = 0.0
-                final_step_entropy_mean = 0.0
-                T = 0
-
-                if epoch >= num_burnin_epochs:
-                    T = opt_cfg.sample_T()
-                    (
-                        loss_acq,
-                        step_reward_mean,
-                        final_step_reward_mean,
-                        final_step_entropy_mean,
-                    ) = optimization_forward(
-                        model=model,
-                        data_cfg=data_cfg,
-                        opt_config=opt_cfg,
-                        loss_config=loss_cfg,
-                        T=T,
-                        device=exp_cfg.device,
-                    )
-                    loss_acq_val = loss_acq.detach().item()
-
-                    # optimization loss backward and free up graph
-                    scaler.scale(loss_acq).backward()
-                    del loss_acq
-
-            # Unscale gradients and perform optimizer step
-            scaler.unscale_(optimizer)
             # gradient clipping (must unscale before clipping)
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(), max_norm=loss_cfg.max_norm
             )
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             scheduler.step()
 
             # ===============================================
@@ -417,7 +391,9 @@ def train(
 
             # Tracking
             ravg.batch_update(log_dict)
+            
             if exp_cfg.log_to_wandb:
+            #    wandb.log(ravg.get_averages())
                 wandb.log(log_dict)
 
             # Logging
@@ -445,7 +421,6 @@ def train(
                     scheduler=scheduler,
                     ckpt_name="ckpt.tar",
                 )
-                ckpt["batch_idx"] = batch_idx
                 torch.save(ckpt, ckpt_filepath)
 
                 # Backup checkpoints

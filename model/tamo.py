@@ -562,13 +562,13 @@ class TAMO(nn.Module):
         )
 
         # Expand query masks
-        observed_target_x_mask = query_x_mask.view(B * n_spaces, dx_max)
+        observed_target_x_mask = query_x_mask.reshape(B * n_spaces, dx_max)
 
         # Encode
         tokens, x_ids, _ = self.forward(
             x_ctx=x_ctx_expanded,
             y_ctx=y_ctx_expanded,
-            x_tar=query_chunks.view(B * n_spaces, n_cand, dx_max),
+            x_tar=query_chunks.reshape(B * n_spaces, n_cand, dx_max),
             x_mask=x_mask_expanded,
             y_mask=y_mask_expanded,
             observed_target_x_mask=observed_target_x_mask,
@@ -578,7 +578,7 @@ class TAMO(nn.Module):
         )
 
         # Tokens and ids for decoder: [B, n_spaces, n_cand, H], [B, n_spaces, H]
-        tokens = tokens.view(B, n_spaces, n_cand, -1)
+        tokens = tokens.reshape(B, n_spaces, n_cand, -1)
         ids_aggregated = self._aggregate_space_x_ids(
             x_ids, query_x_mask, B=B, n_spaces=n_spaces
         )

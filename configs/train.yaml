@@ -17,10 +17,10 @@ experiment:
 train:
   num_total_epochs: 400000
   num_burnin_epochs: 392000
-  nc_burnin_ratio: 0.8
+  nc_burnin_ratio: 0.7
   lr1: 1e-3
   lr2: 4e-5
-  optimizer_type: adamw
+  optimizer_type: adam
   scheduler_type: cosine_with_warmup
   weight_decay: 1e-2
   num_warmup_steps: null
@@ -64,7 +64,7 @@ optimization:
   epsilon: 1.0
 
 log:
-  freq_log: 200
+  freq_log: 500
   freq_save: 500
   freq_save_extra_burnin: 25000
   freq_save_extra: 5000

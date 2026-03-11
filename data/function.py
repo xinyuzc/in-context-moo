@@ -535,7 +535,7 @@ class TestFunction:
         if hasattr(self.func, 'to'):
             self.func = self.func.to(x_transformed.device)
         y = self.func(x_transformed)
-        y = y.view(*x.shape[:-1], self.y_dim)
+        y = y.reshape(*x.shape[:-1], self.y_dim)
 
         return y
 

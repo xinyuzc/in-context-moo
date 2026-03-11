@@ -102,6 +102,14 @@ class Averager(object):
             return None
         return self.sum[key] / self.cnt[key] if self.cnt[key] > 0 else 0
 
+    def get_averages(self) -> dict:
+        """Return a dict of averaged metrics."""
+        return {
+            key: self.sum[key] / self.cnt[key]
+            for key in self.sum
+            if self.cnt[key] > 0
+        }
+
     def info(self) -> str:
         line = ""
         for key in self.sum.keys():

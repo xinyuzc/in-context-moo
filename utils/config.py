@@ -215,7 +215,7 @@ def build_dataloader(
         pin_memory=(device != "cpu"),
         num_workers=num_workers,
         persistent_workers=(num_workers > 0),
-        prefetch_factor=prefetch_factor,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
     )
 
     return dataloader

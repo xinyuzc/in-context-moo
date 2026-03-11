@@ -1,9 +1,9 @@
 #!/bin/bash -l
-#SBATCH --job-name=dx12_dy123
-#SBATCH --mem=8G
+#SBATCH --job-name=DX12_DY123
+#SBATCH --mem=12G
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
-#SBATCH --partition=gpu-h100-80g,gpu-a100-80g,gpu-h200-35g-ia-ellis,gpu-h200-35g-ia
+#SBATCH --partition=gpu-a100-80g,gpu-h100-80g
 #SBATCH --time=72:00:00
 #SBATCH --output=outputs/train/%x_%j.output
 #SBATCH --error=outputs/train/%x_%j.err
@@ -22,7 +22,7 @@ x_dim_list="[1,2]"
 y_dim_list="[1,2,3]"
 
 
-CUDA_LAUNCH_BLOCKING=1 python train.py --config-name=train \
+python train.py --config-name=train \
 experiment.expid="${expid}" \
 experiment.resume=${resume} \
 data.x_dim_list="${x_dim_list}" \

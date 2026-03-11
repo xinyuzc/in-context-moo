@@ -96,35 +96,16 @@ def _check_samples(
     lengthscale_list: List[str],
     std_list: List[Tensor],
     covar_list: List[Tensor],
+    max_condition_number: float = 1e6,
 ):
-    """Check if the samples contain NaNs or Infs."""
-    num_kernels = len(kernel_type_list)
-
+    """Check if the samples contain NaNs, Infs, or ill-conditioned covariance matrices."""
     if not torch.all(torch.isfinite(x)):
-        print(f"==== x [{x.shape}] contains NaNs or Infs ====")
+        return False
 
     if not torch.all(torch.isfinite(y)):
-        print(f"==== y [{y.shape}] contains NaNs or Infs ====")
-
-        for k in range(num_kernels):
-            kernel_type = kernel_type_list[k]
-            lengthscale = lengthscale_list[k]
-            std = std_list[k]
-            cov = covar_list[k]
-            eigvals = torch.linalg.eigvalsh(cov)
-
-            if torch.isnan(cov).any():
-                print("Covariance matrix contains NaNs.")
-
-            print(
-                f"==== Kernel {k} ===="
-                f"    type: {kernel_type}"
-                f"    lengthscale: {lengthscale}"
-                f"    std: {std}"
-                f"    min eigval: {eigvals.min().item()}"
-                f"    max eigval: {eigvals.max().item()}"
-                f"    condition number: {(eigvals.max() / eigvals.min()).item()}"
-            )
+        return False
+    
+    return True
 
 
 def multi_task_gp_prior_sampler(
@@ -217,7 +198,7 @@ def multi_task_gp_prior_sampler(
         prior_dist = model(x)
         y = prior_dist.sample(torch.Size([1])).squeeze(0)  # [num_datapoints, num_task]
 
-    _check_samples(
+    is_valid = _check_samples(
         x=x,
         y=y,
         kernel_type_list=[data_kernel_type],
@@ -231,6 +212,9 @@ def multi_task_gp_prior_sampler(
     likelihood = likelihood.cpu()
     model.eval()
     del model, likelihood
+
+    if not is_valid:
+        return None, None
 
     return x, y
 
@@ -326,7 +310,7 @@ def multi_output_gp_prior_sampler(
         y = torch.stack(ys, dim=-1)
 
     # Check if the sampled outputs contain NaNs or Infs
-    _check_samples(
+    is_valid = _check_samples(
         x=x,
         y=y,
         kernel_type_list=[
@@ -344,6 +328,10 @@ def multi_output_gp_prior_sampler(
     likelihood = likelihood.cpu()
     model.eval()
     del model, likelihood
+
+    if not is_valid:
+        return None, None
+
     return x, y
 
 
@@ -448,12 +436,10 @@ def gp_sampler(
                     device=device,
                 )
             except Exception:
-                # Cholesky decomposition can fail on ill-conditioned kernels
-                # (NotPosDefError or CUDA segfault-prone errors); retry with
-                # freshly sampled kernel parameters.
+                print("Exception when sampling from gps.")
                 continue
 
-            if not torch.isnan(y).any() and not torch.isinf(y).any():
+            if y is not None and not torch.isnan(y).any() and not torch.isinf(y).any():
                 break
 
         y_list.append(y)

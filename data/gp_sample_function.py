@@ -15,7 +15,7 @@ import numpy as np
 
 from data.sampler import gp_sampler, sample_nc
 from data.base.preprocessing import transform, make_range_tensor
-from data.function_sampling import sample_domain
+from data.function_sampling import sample_domain, generate_sobol_samples
 from data.base.masking import generate_dim_mask, restore_by_mask, gather_by_indices
 from data.moo import MOO
 from data.sampler_global_opt import OptimizationSampler
@@ -249,16 +249,29 @@ class GPSampleFunction:
             chunks: Chunks of input points, [d, dx]
             chunk_mask: Mask for valid chunks, [num_chunks, dx]
         """
-        # Sample input locations shared in the batch
-        x, chunks, chunk_mask = sample_domain(
-            d=d,
-            max_x_dim=x_dim,
-            device=device,
-            input_bounds=x_range,
-            use_grid_sampling=use_grid_sampling,
-            use_factorized_policy=use_factorized_policy,
-            seed=seed,
+        x_range_tensor = make_range_tensor(range_list=x_range, num_dim=x_dim).to(
+            device=device
         )
+
+        # Sample input locations shared in the batch
+        if use_factorized_policy:
+            x, chunks, chunk_mask = sample_domain(
+                d=d,
+                max_x_dim=x_dim,
+                device=device,
+                input_bounds=x_range,
+                use_grid_sampling=use_grid_sampling,
+                use_factorized_policy=use_factorized_policy,
+                seed=seed,
+            )
+        else:
+            x = generate_sobol_samples(
+                x_range=x_range_tensor, num_datapoints=d, grid=use_grid_sampling
+            )
+            chunks = x.clone()
+            chunk_mask = torch.ones(
+                x.shape[-1], device=x.device, dtype=torch.bool
+            ).unsqueeze(0)
 
         if sampler_type == "gp":
             x = x.unsqueeze(0).expand(batch_size, -1, -1)  # [b, m, dx]
@@ -289,9 +302,6 @@ class GPSampleFunction:
                 std_range=std_range,
                 p_iso=p_iso,
                 device=device,
-            )
-            x_range_tensor = make_range_tensor(range_list=x_range, num_dim=x_dim).to(
-                device=device
             )
 
             _y_list = []

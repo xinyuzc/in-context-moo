@@ -369,7 +369,7 @@ def _compute_hv_batch(
     else:
         # Compute hv only on valid objectives
         assert y_mask.shape[-1] == max_y_dim
-        mask_expanded = y_mask.view(-1, max_y_dim).expand(B, -1)  # [B, max_y_dim]
+        mask_expanded = y_mask.reshape(-1, max_y_dim).expand(B, -1)  # [B, max_y_dim]
 
         for b in range(B):
             refs_b = ref_point[b, 0, mask_expanded[b]]  # [dy]
@@ -393,6 +393,14 @@ def _compute_hv(
     """
     ref_point = _tnp(ref_point)
     solutions = _tnp(solutions)
+
+    # NOTE pymoo's HV can segfault on 1D data;
+    # handle single-objective case directly
+    if ref_point.shape[0] == 1:
+        dominated = solutions[solutions[:, 0] <= ref_point[0]]
+        if len(dominated) == 0:
+            return 0.0
+        return float(ref_point[0] - dominated[:, 0].min())
 
     hv_indicator = HV(ref_point=ref_point)
     hv = hv_indicator(solutions)

@@ -17,6 +17,6 @@ data:
   max_rank: null
   p_iso: 0.5
   standardize: true
-  jitter: 1e-4
-  max_tries: 10
+  jitter: 1e-3
+  max_tries: 6
   scene: null

@@ -31,9 +31,30 @@ Check `notebooks/` for examples of usage and visualizations, where:
 1. `example.ipynb` shows how to create test environment, how TAMO predicts, and util functions to plot TAMO optimization results.
 2. `synthetic_data.ipynb` shows how to load generated dataset or online generate synthetic data.
 
-## How to start
-### Generate synthetic dataset before training
-TAMO is trained on pre-generated synthetic datasets for efficiency. To generate $100000$ dataset containing $300$ datapoints with $d_x=1, d_y=1$ for training:
+## Train 
+### Option 1: online generate data and train the model
+TO train TAMO on dimensions $d_x\in \{1,2\}, d_y \in \{1,2,3\}$: 
+```
+python train_online.py --config-name=train \
+experiment.expid=[EXPID] \
+data.x_dim_list=[1,2] \
+data.y_dim_list=[1,2,3] \
+train.num_total_epochs=400000 \
+train.num_burnin_epochs=393500
+```
+Check all avaialable arguments in `configs/train.yaml`.
+
+### Option 2: train on pre-generated datasets
+TAMO can be trained on **pre-generated synthetic datasets** for efficiency: 
+```
+python train.py --config-name=train \
+experiment.expid=[EXPID] \
+data.x_dim_list=[1,2] \
+data.y_dim_list=[1,2,3] \
+train.num_total_epochs=400000 \
+train.num_burnin_epochs=393500
+```
+To generate $100000$ dataset containing $300$ datapoints with $d_x=1, d_y=1$ for training:
 ```bash
 python generate_data.py  --config-name=generate_data \
     experiment.mode=train \
@@ -45,30 +66,35 @@ python generate_data.py  --config-name=generate_data \
     generate.num_datasets=100000 \
     generate.num_datapoints=300 
 ```
-Dataset will be saved at `datasets/train/x_dim_1/y_dim_1/gp_0.hdf5`. Note that dataset can be alternatively saved under `datasets/{data.data_id}/train/x_dim_1/y_dim_1/gp_0.hdf5` by assigning valid values to `data.data_id`. This could be useful if you would like to try different priors.
+Dataset will be saved at `datasets/train/x_dim_1/y_dim_1/gp_0.hdf5`. Note that dataset can be alternatively saved under `datasets/{data.data_id}/train/x_dim_1/y_dim_1/gp_0.hdf5` by assigning valid values to `data.data_id`. This could be useful if you would like to try different priors. Check all available arguments in `configs/generate_data.yaml`. 
 
-Check all available arguments in `configs/generate_data.yaml`. 
 
-### Train 
-TO train TAMO on dimensions $d_x\in \{1,2\}, d_y \in \{1,2,3\}$: 
-```
-python train.py --config-name=train \
-experiment.expid=[EXPID] \
-data.x_dim_list=[1,2] \
-data.y_dim_list=[1,2,3] \
-train.num_total_epochs=400000 \
-train.num_burnin_epochs=393500
-```
-Check all avaialable arguments in `configs/train.yaml`.
-
-### Evaluation 
+## Evaluation 
 To test trained TAMO on GP data with $d_x=2, d_y=2$: 
 ```
 python test.py --config-name=test experiment.expid=[EXPID] data.function_name=dx2_dy2
 ```
-Check all available arguments in `configs/test.yaml`.
+Check all available arguments in `configs/test.yaml`. For example:
+1. Batch queries with fantasized outcomes:
+   ```
+   python test.py --config-name=test experiment.expid=[EXPID] data.function_name=dx2_dy2 \
+    optimization.fantasy=True \
+    optimization.q=10 \
+    optimization.read_cache=False \
+    optimization.write_cache=False \
+    prediction.read_cache=False \
+    suffix_segment=batch_q10
+   ```
+2. Decoupled observations: 
+   ```
+   python test.py --config-name=test experiment.expid=[EXPID] data.function_name=dx2_dy2 \
+   optimization.cost_mode=True \
+   optimization.dim_mask_gen_mode=alternate \
+   suffix_segment=decoupled
+   ```
 
-#### Test functions
+Test function classes and result saving paths are detailed below.
+### Test functions
 `data/function.py` implements test function classes, where: 
 - `SyntheticFunction`: environment based on botorch function.
 - `IntepolatorFunction`: environment based on the linear interpolation of dataset. 
@@ -85,7 +111,7 @@ Some core functions:
 - `transform_outputs()`: **Transform function values for TAMO**.
 - `step()`: update observations, compute hypervolume and regrets on all observations.
 
-#### Results 
+### Results 
 Metrics and plots will be saved under `results/data` and `results/plots` respectively.
 
 ## Citation 
