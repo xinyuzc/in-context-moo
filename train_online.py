@@ -42,7 +42,7 @@ N = 300
 @hydra.main(version_base=None, config_path="configs", config_name="train.yaml")
 def main(config: DictConfig):
     torch.set_default_dtype(torch.float32)
-    torch.set_default_device("cpu")
+    # torch.set_default_device("cpu")
 
     # Setup configurations
     exp_cfg = ExConfig(**config.experiment)
@@ -184,18 +184,25 @@ def train(
     ravg = Averager()
 
     while epoch < num_total_epochs:
+        # Pre-sample (x_dim, y_dim) pairs and group by dims for batched generation
+        dim_pairs = [
+            (random.choice(data_cfg.x_dim_list), random.choice(data_cfg.y_dim_list))
+            for _ in range(pred_cfg.batch_size)
+        ]
+        dim_groups = {}
+        for xd, yd in dim_pairs:
+            dim_groups.setdefault((xd, yd), 0)
+            dim_groups[(xd, yd)] += 1
+
         x_list = []
         y_list = []
         valid_x_counts_list = []
         valid_y_counts_list = []
-        while len(x_list) < pred_cfg.batch_size:
-            x_dim = random.choice(data_cfg.x_dim_list)
-            y_dim = random.choice(data_cfg.y_dim_list)
-
-            x_i, y_i, _, _ = GPSampleFunction.sample_from_syn(
+        for (x_dim, y_dim), group_size in dim_groups.items():
+            x_g, y_g, _, _ = GPSampleFunction.sample_from_syn(
                 x_dim=x_dim,
                 y_dim=y_dim,
-                batch_size=1,
+                batch_size=group_size,
                 d=N,
                 use_grid_sampling=False,
                 use_factorized_policy=False,
@@ -216,17 +223,24 @@ def train(
                 sampler_type=data_cfg.function_name,
             )
 
-            # Pad to max dimensions: [1, N, x_dim] -> [1, N, max_x_dim]
-            x_i = F.pad(x_i, (0, data_cfg.max_x_dim - x_dim))
-            y_i = F.pad(y_i, (0, data_cfg.max_y_dim - y_dim))
+            # Pad to max dimensions: [group_size, N, x_dim] -> [group_size, N, max_x_dim]
+            x_g = F.pad(x_g, (0, data_cfg.max_x_dim - x_dim))
+            y_g = F.pad(y_g, (0, data_cfg.max_y_dim - y_dim))
 
-            if has_nan_or_inf(x_i, "x", log) or has_nan_or_inf(y_i, "y", log):
-                continue
+            # Filter out samples with nan/inf
+            valid_mask = torch.isfinite(x_g).all(dim=(1, 2)) & torch.isfinite(y_g).all(dim=(1, 2))
+            if not valid_mask.all():
+                log(f"[WARNING] Filtered {(~valid_mask).sum().item()} nan/inf samples for dims ({x_dim}, {y_dim})")
+                x_g = x_g[valid_mask]
+                y_g = y_g[valid_mask]
+                group_size = x_g.shape[0]
+                if group_size == 0:
+                    continue
 
-            x_list.append(x_i)
-            y_list.append(y_i)
-            valid_x_counts_list.append(x_dim)
-            valid_y_counts_list.append(y_dim)
+            x_list.append(x_g)
+            y_list.append(y_g)
+            valid_x_counts_list.extend([x_dim] * group_size)
+            valid_y_counts_list.extend([y_dim] * group_size)
 
         x = torch.cat(x_list, dim=0)
         y = torch.cat(y_list, dim=0)

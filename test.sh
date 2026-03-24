@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=DX12_DY123
+#SBATCH --job-name=DX12345_DY123
 #SBATCH --mem=2G
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
@@ -48,14 +48,15 @@ q=1
 scene=null
 data_id=null
 
+# functions to test 
+FUNCTIONS=("dx2_dy2" "AckleyRosenbrock" "AckleyRastrigin" "BraninCurrin")
+
 ## ============================================= ##
 ##           Experiment Configurations           ##
 ## ============================================= ##
 
-FUNCTIONS=("dx2_dy2" "AckleyRosenbrock" "AckleyRastrigin" "BraninCurrin")
-
-# Set expid to the TAMO experiment you want to evaluate
-expid=DX12_DY123
+max_x_dim=5
+expid=DX12345_DY123
 
 # --- HPO 3DGS ---
 # scene=ship  # "lego", "materials", "mic", "ship"
@@ -69,7 +70,7 @@ expid=DX12_DY123
 # FUNCTIONS=("Ackley" "Rastrigin" "Forrester" "Branin" "EggHolder" "dx2_dy1")
 
 # --- Batch size with fantasy ---
-# fantasy=True
+# fantasy=False
 # q=10
 # suffix_segment=batch_q10
 # opt_read_cache=False
@@ -90,6 +91,7 @@ for ckpt_name in "${CKPT_NAMES[@]}"; do
     for function_name in "${FUNCTIONS[@]}"; do
         CUDA_LAUNCH_BLOCKING=1 python test.py --config-name=test \
             experiment.seed=${SLURM_ARRAY_TASK_ID} \
+            model.max_x_dim=${max_x_dim} \
             data.function_name="${function_name}" \
             data.data_id=${data_id} \
             data.scene=${scene} \

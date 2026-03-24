@@ -32,20 +32,9 @@ Check `notebooks/` for examples of usage and visualizations, where:
 2. `synthetic_data.ipynb` shows how to load generated dataset or online generate synthetic data.
 
 ## Train 
-### Option 1: online generate data and train the model
-TO train TAMO on dimensions $d_x\in \{1,2\}, d_y \in \{1,2,3\}$: 
-```
-python train_online.py --config-name=train \
-experiment.expid=[EXPID] \
-data.x_dim_list=[1,2] \
-data.y_dim_list=[1,2,3] \
-train.num_total_epochs=400000 \
-train.num_burnin_epochs=393500
-```
-Check all avaialable arguments in `configs/train.yaml`.
 
-### Option 2: train on pre-generated datasets
-TAMO can be trained on **pre-generated synthetic datasets** for efficiency: 
+### Option 1: train on pre-generated datasets (Recommended)
+TAMO is trained on **pre-generated synthetic datasets** for efficiency. TO train TAMO on dimensions $d_x\in \{1,2\}, d_y \in \{1,2,3\}$: 
 ```
 python train.py --config-name=train \
 experiment.expid=[EXPID] \
@@ -54,6 +43,9 @@ data.y_dim_list=[1,2,3] \
 train.num_total_epochs=400000 \
 train.num_burnin_epochs=393500
 ```
+
+Check all avaialable arguments in `configs/train.yaml`.
+
 To generate $100000$ dataset containing $300$ datapoints with $d_x=1, d_y=1$ for training:
 ```bash
 python generate_data.py  --config-name=generate_data \
@@ -68,6 +60,16 @@ python generate_data.py  --config-name=generate_data \
 ```
 Dataset will be saved at `datasets/train/x_dim_1/y_dim_1/gp_0.hdf5`. Note that dataset can be alternatively saved under `datasets/{data.data_id}/train/x_dim_1/y_dim_1/gp_0.hdf5` by assigning valid values to `data.data_id`. This could be useful if you would like to try different priors. Check all available arguments in `configs/generate_data.yaml`. 
 
+### Option 2: online generate data and train the model
+For quick start, TAMO can also be trained with **data generated online**:
+```
+python train_online.py --config-name=train \
+experiment.expid=[EXPID] \
+data.x_dim_list=[1,2] \
+data.y_dim_list=[1,2,3] \
+train.num_total_epochs=400000 \
+train.num_burnin_epochs=393500
+```
 
 ## Evaluation 
 To test trained TAMO on GP data with $d_x=2, d_y=2$: 
