@@ -128,20 +128,32 @@ class OptimizationConfig:
     write_cache: bool = False
     epsilon: float = 1.0
     use_curriculum: bool = False
+    use_logit_mask: bool = False
 
-    # Batch query
+    # Batch query with fantasized outcomes
     q: int = 1
-
-    # Use fantasized outcomes for batch query
     fantasy: bool = False
 
-    # Cost associated with each evaluation
+    # Cost associates with each objective or instance
     cost_mode: bool = False
     cost: float = 1.0
+
+    # How to sample query points
+    sampling_mode: str = "full"
+    num_reweighted_samples: int = 2048
 
     def __post_init__(self):
         if self.T is not None:
             assert isinstance(self.T, int) and self.T > 0, "T must be a positive integer."
+
+        if self.sampling_mode not in ["full", "top_d", "reweighted"]: 
+            raise ValueError(f"sampling mode `{self.sampling_mode} not supported.")
+
+        # use_logit_mask can be True only if considering a full, fixed query set during optimization...
+        if self.sampling_mode != "full":
+            self.use_logit_mask = False
+        if not self.use_fixed_query_set: 
+            self.use_logit_mask = False
 
     def sample_T(self) -> int:
         """Return T if fixed, otherwise sample from [min_T, max_T]."""

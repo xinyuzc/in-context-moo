@@ -94,14 +94,14 @@ class TestFunction:
     `get_metadata()` must be implemented in subclasses.
 
     Attrs:
-        function_name (str): Function name
-        func (callable): Callable function instance
-        x_dim (int): Dimension of the input space
-        y_dim (int): Dimension of the output space
-        x_bounds (Tensor): Input bounds in the truth domain, shape [dx, 2]
-        y_bounds (Tensor): Output bounds in the truth domain, shape [dy, 2]
-        ref_point (Tensor): Reference point in the truth domain, shape [dy]
-        max_hv (float): Maximum hypervolume value from `ref_point` in the truth domain
+        function_name:  Function name for identification
+        func:           Callable function instance
+        x_dim:          Dimension of the input space
+        y_dim:          Dimension of the output space
+        x_bounds:       [dx, 2]
+        y_bounds:       [dy, 2]
+        ref_point:      [dy]
+        max_hv:         Maximum hypervolume in the true function value domain
     """
 
     func: callable = None
@@ -153,11 +153,11 @@ class TestFunction:
         """Scale inputs from its original domain (`input_bounds`) to function input domain (`x_bounds`).
 
         Args:
-            inputs: [..., dx]
-            input_bounds: [dx, 2] | [2]
+            inputs:         [..., dx]
+            input_bounds:   [dx, 2] | [2]
 
         Returns:
-            scaled_inputs: [..., dx]
+            scaled inputs [..., dx]
         """
         num_dim = inputs.shape[-1]
         tkwargs = {"device": inputs.device, "dtype": inputs.dtype}
@@ -181,11 +181,11 @@ class TestFunction:
         """Scale outputs from function output domain (`y_bounds`) to target domain (`output_bounds`).
 
         Args:
-            outputs: [..., dy]
-            output_bounds: [dy, 2] | [2]
+            outputs:        [..., dy]
+            output_bounds:  [dy, 2] | [2]
 
         Returns:
-            scaled_outputs [..., dy]
+            scaled outputs [..., dy]
         """
         num_dim = outputs.shape[-1]
         tkwargs = {"device": outputs.device, "dtype": outputs.dtype}
@@ -327,13 +327,12 @@ class TestFunction:
         """Evaluate function at x.
 
         Args:
-            x: [m, dx_max]
-            input_bounds: [dx_max, 2]
-            x_mask: Optional valid x dim mask, [dx_max]
-            y_mask: Optional valid y dim mask, [dy_max]
+            x:              [m, dx_max]
+            input_bounds:   [dx_max, 2]
+            x_mask:         [dx_max]
+            y_mask:         [dy_max]
 
-        Returns:
-            y: [m, dy_max]
+        Returns: y [m, dy_max]
         """
         if x_mask is None and y_mask is None:
             return self.__call__(x=x, input_bounds=input_bounds)
@@ -532,7 +531,7 @@ class TestFunction:
         x_transformed = self.transform_inputs(inputs=x, input_bounds=input_bounds)
 
         # Evaluate function (ensure func is on the same device as input)
-        if hasattr(self.func, 'to'):
+        if hasattr(self.func, "to"):
             self.func = self.func.to(x_transformed.device)
         y = self.func(x_transformed)
         y = y.reshape(*x.shape[:-1], self.y_dim)
@@ -552,7 +551,7 @@ class SyntheticFunction(TestFunction):
 
     @staticmethod
     def get_function_constructor(function_name: str) -> Optional[callable]:
-        
+
         func_constructor = SYN_FUNCTIONS.get(function_name)
         return func_constructor
 

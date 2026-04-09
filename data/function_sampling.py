@@ -26,13 +26,11 @@ def generate_sobol_samples(
     """Generate sobol samples: [num_datapoints, d]
 
     Args:
-        x_range: [d, 2]
-        num_datapoints (int): Number of datapoints to generate
-        grid (bool): Whether to sample from a grid or randomly
-            grid is True: num_datapoints sobol samples on input space
-            otherwise: max(GRID_SIZE, num_datapoints) sobol samples, and select `num_datapoints` randomly
+        x_range:        [d, 2]
+        num_datapoints: Number of samples
+        grid:          Sample from a grid or randomly
 
-    Returns: x of shape [num_datapoints, d]
+    Returns: x [num_datapoints, d]
     """
     assert x_range.ndim == 2 and x_range.shape[1] == 2
     dim_num = x_range.shape[0]
@@ -100,17 +98,17 @@ def _sample_subspace_n_scatter_(
     grid: bool,
     seed: int = 0,
 ):
-    """Sample subspaces and in-place scatter into chunks.
+    """Sample subspace and scatter into chunks in-place.
 
     Args:
-        sample_joint (bool): Whether to sample jointly or independently
-        chunks: [d, max_x_dim], d is number of samples
-        chunk_mask: [n, max_x_dim], n is number of chunks
-        x_range: [count_subspace, 2], count_subspace <= max_x_dim
-        x_dim_indices: [count_subspace], indices of valid dims in subspaces
-        chunk_index_slice: [count_chunk], count_chunk <= n, indices of chunks (subspaces) to fill
-        d (int): Number of samples
-        grid (bool): Sample from a grid or randomly
+        sample_joint:       Sample jointly (True) or independently (False)
+        chunks:             [d, dx_max]
+        chunk_mask:         [n, dx_max]
+        x_range:            [count_subspace, 2]
+        x_dim_indices:      [count_subspace], valid dim indices
+        chunk_index_slice:  [count_chunk], chunk indices to fill
+        d:                  Number of samples
+        grid:               Sample from grid or randomly
     """
     # Sample `count_subspace` subspaces: [d, count_subspace]
     if sample_joint:
@@ -134,28 +132,20 @@ def _sample_factorized_domain(
     use_grid_sampling: bool,
     seed: int = 0,
 ) -> Tuple[Tensor, Tensor]:
-    """Sample from a factorized space (efficient version).
+    """Sample from a factorized space.
 
-    Factorization strategy:
-    - q_dim_mask=True dims: sampled independently (reduces action space size)
-    - q_dim_mask=False dims: sampled jointly (preserves correlations)
-
-    Requiring no overlapping valid dims in each subspace,
-    we can use chunks of shape [num_subspace_points, dx_max],
-    mask of shape [count_chunk, dx_max] to represent subspaces.
+    q_dim_mask=True dims: sampled independently; False dims: sampled jointly.
 
     Args:
-        x_range: Input range
-        x_dim_mask: Mask for valid dims, shape [x_dim]
-        q_dim_mask: Mask for dims that will be independently sampled, shape [x_dim]
-        num_subspace_points: number of samples in each subspace
-        use_grid_sampling: whether to sample from a grid or random locations
+        x_range:              Input range
+        x_dim_mask:           [x_dim], valid dims
+        q_dim_mask:           [x_dim], dims to sample independently
+        num_subspace_points:  Samples per subspace
+        use_grid_sampling:    Grid or random sampling
 
     Returns:
-        chunks: [num_subspace_points, dx_max]
-        chunk_mask: [count_chunk, dx_max]
-            chunk_mask[:count_ind]: independent subspaces (one per dim)
-            chunk_mask[-1]: joint subspace (if exists)
+        chunks:      [num_subspace_points, dx_max]
+        chunk_mask:  [count_chunk, dx_max]; [:count_ind] independent, [-1] joint
     """
     device = x_dim_mask.device
     dx_max = x_dim_mask.shape[-1]
@@ -224,21 +214,18 @@ def _sample_factorized_domain(
 def _combine_factorized_domain(
     chunks: Tensor, chunk_mask: Tensor
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    """Combine factorized domains in the full space (efficient version).
-    NOTE: chunks are combined in order, i.e., pattern exists, be careful with slices!
+    """Combine factorized chunks into the full space.
 
-    The function creates a full-space grid of indices and then gathers and sums
-    data from 'chunks' based on these indices, using 'chunk_mask' for dimension selection.
+    NOTE: chunks combined in order; chunk_mask must have no overlapping valid dims.
 
     Args:
-        chunks: Data chunks, shape [d, dx_max].
-        chunk_mask: Mask for valid dims in each chunk, shape [n_chunks, dx_max].
-            Must have NO overlapping valid dims between chunks.
+        chunks:      [d, dx_max]
+        chunk_mask:  [n_chunks, dx_max], no overlapping valid dims between chunks
 
     Returns:
-        samples: Combined samples, shape [M, dx_max], where M = d^n_chunks.
-        mask: Combined mask over the full space, shape [dx_max].
-        chunk_coord_grid: The grid of indices used for combination, shape [M, n_chunks].
+        samples:           [M, dx_max], M = d^n_chunks
+        mask:              [dx_max], combined valid dims
+        chunk_coord_grid:  [M, n_chunks], combination index grid
     """
     # ==== Checks ====
     assert chunk_mask.shape[-1] == chunks.shape[-1]
@@ -303,22 +290,24 @@ def sample_factorized_domain(
     """Sample input locations from factorized subspaces.
 
     Args:
-        d (int): Number of samples
-        x_mask: Mask for valid x dims, shape [max_x_dim]
-        input_bounds (FloatListOrNestedOrTensor): Input range
-        use_grid_sampling (bool): Whether to sample from a grid or random locations
-        use_factorized_policy (bool): Whether to use factorized policy
-            True: sample from factorized subspaces and combine
-            False: sample from the full space directly
+        d:                      Number of samples
+        max_x_dim:              Max input dimension
+        input_bounds:           Input range
+        device:                 Device
+        x_mask:                 [max_x_dim], valid dims (default: all)
+        use_grid_sampling:      Grid or random sampling
+        use_factorized_policy:  Sample factorized (True) or full space (False)
 
     Returns:
-        chunks: [d, dx_max]
-        chunk_mask: [n, dx_max], n is number of chunks
+        chunks:      [d, dx_max]
+        chunk_mask:  [n, dx_max]
     """
     # Prepare masks
     if x_mask is None:
         x_mask = torch.ones(max_x_dim, device=device, dtype=torch.bool)
 
+    x_mask = x_mask.to(device)
+    
     if use_factorized_policy:
         q_mask = torch.ones(max_x_dim, device=device, dtype=torch.bool)
     else:
@@ -350,18 +339,18 @@ def sample_domain(
     """Sample factorized domains and combine in the full space.
 
     Args:
-        d (int): Number of samples
-        x_mask: [max_x_dim], mask for valid dims
-        input_bounds (FloatListOrNestedOrTensor): Input range
-        use_grid_sampling (bool): Whether to sample from a grid or random locations
-        use_factorized_policy (bool): Whether to use factorized policy
-            True: sample from factorized subspaces and combine
-            False: sample from the full space directly
+        d:                      Number of samples
+        max_x_dim:              Max input dimension
+        device:                 Device
+        input_bounds:           Input range
+        x_mask:                 [max_x_dim], valid dims (default: all)
+        use_grid_sampling:      Grid or random sampling
+        use_factorized_policy:  Sample factorized (True) or full space (False)
 
     Returns:
-        x: [m, max_x_dim], m is number of combined samples.
-        chunks: [d, max_x_dim]
-        chunk_mask: [n, max_x_dim], n is number of chunks
+        x:           [m, max_x_dim], m = d^n_chunks
+        chunks:      [d, max_x_dim]
+        chunk_mask:  [n, max_x_dim]
     """
     chunks, chunk_mask = sample_factorized_domain(
         d=d,
@@ -381,15 +370,14 @@ def sample_domain(
 
 
 def factorized_to_flat_index(chunk_indices: Tensor, n: int, d: int) -> Tensor:
-    """Turn index in factorized spaces to index in full space.
+    """Convert factorized chunk indices to full-space index.
 
     Args:
-        chunk_indices: [..., n]
-        n: number of chunks
-        d: number of points in each chunk
+        chunk_indices:  [..., n]
+        n:              Number of chunks
+        d:              Points per chunk
 
-    Returns:
-        full_indices: [..., 1]
+    Returns: full_indices [..., 1]
     """
     assert chunk_indices.shape[-1] == n
     indices = chunk_indices.long()

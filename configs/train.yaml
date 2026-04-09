@@ -62,6 +62,8 @@ optimization:
   read_cache: true
   write_cache: true
   epsilon: 1.0
+  use_logit_mask: false
+  sampling_mode: full
 
 log:
   freq_log: 500

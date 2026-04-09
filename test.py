@@ -24,19 +24,6 @@ from data.dataset import map_function_to_gp_datapath, get_function_environment
 from evaluate import evaluate_prediction, evaluate_optimization
 from utils.seed import set_all_seeds
 
-# ------------------------------------------------------------------
-# Hack - checkpoint key remapping from clean-up
-# ------------------------------------------------------------------
-_CKPT_KEY_REMAP = {
-    "decoder.id_task": "decoder.task_tokens",
-    "decoder.token_selected": "decoder.ar_bias_token",
-}
-
-
-def remap_checkpoint_keys(state_dict: dict) -> dict:
-    return {_CKPT_KEY_REMAP.get(k, k): v for k, v in state_dict.items()}
-
-
 @hydra.main(version_base=None, config_path="configs", config_name="test.yaml")
 def main(config: DictConfig):
     assert config.experiment.mode == "test", f"Set mode to 'test'!"
@@ -98,9 +85,6 @@ def main(config: DictConfig):
             f"Invalid checkpoint loaded from {exp_path}. "
             "Checkpoint is either empty or missing the 'model' key."
         )
-
-    # Remap keys that were renamed during the clean-up
-    model_state_dict = remap_checkpoint_keys(model_state_dict)
 
     # ------------------------------------------------------------------
     # Build model and load weights

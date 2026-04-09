@@ -56,6 +56,10 @@ optimization:
   q: 1
   cost_mode: false
   cost: 1.0
+  
+  use_logit_mask: true
+  sampling_mode: full
+  num_reweighted_samples: 2048
 
 log:
   plot_enabled: true

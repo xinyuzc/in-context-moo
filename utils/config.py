@@ -35,6 +35,9 @@ X_RANGE = [-5.0, 5.0]
 Y_RANGE = [-1.0, 1.0]
 SPLITS = ["train", "validation", "test"]
 
+# ------------------------------------------------------------------
+# Hack - checkpoint key remapping from clean-up
+# ------------------------------------------------------------------
 # Remap keys that were renamed during the clean-up...
 _ckpt_key_map = {
     "decoder.id_task": "decoder.task_tokens",
@@ -43,6 +46,18 @@ _ckpt_key_map = {
 
 def remap_checkpoint_keys(state_dict: dict) -> dict:
     return {_ckpt_key_map.get(k, k): v for k, v in state_dict.items()}
+
+
+
+_CKPT_KEY_REMAP = {
+    "decoder.id_task": "decoder.task_tokens",
+    "decoder.token_selected": "decoder.ar_bias_token",
+}
+
+
+def remap_checkpoint_keys(state_dict: dict) -> dict:
+    return {_CKPT_KEY_REMAP.get(k, k): v for k, v in state_dict.items()}
+
 
 def load_checkpoint(
     exp_path: str,
@@ -63,6 +78,10 @@ def load_checkpoint(
             raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}.")
 
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=weights_only)
+        model_state_dict = ckpt.get("model", {})
+        
+        # Remap keys that were renamed during the code clean-up
+        ckpt["model"] = remap_checkpoint_keys(model_state_dict)
     else:
         if osp.exists(ckpt_path):
             raise FileExistsError(f"Checkpoint {ckpt_path} already exists.")
