@@ -57,8 +57,12 @@ class MOO:
         Returns: hv [B], solutions [B, N, dy_max], ref_point [B, 1, dy_max]
         """
         return compute_normalized_hv_batch(
-            solutions=solutions, minimum=minimum, maximum=maximum,
-            ref_point=ref_point, y_mask=y_mask, normalize=normalize,
+            solutions=solutions,
+            minimum=minimum,
+            maximum=maximum,
+            ref_point=ref_point,
+            y_mask=y_mask,
+            normalize=normalize,
         )
 
     @staticmethod
@@ -86,11 +90,16 @@ class MOO:
         """
         if do_single_objective:
             mins = solutions.min(dim=1).values  # [B, dy_max]
-            return -compact_by_mask(data=mins, mask=mask, dim=-1).squeeze(-1).cpu().numpy()
+            return (
+                -compact_by_mask(data=mins, mask=mask, dim=-1).squeeze(-1).cpu().numpy()
+            )
         return MOO.compute_hv(
-            solutions=solutions, ref_point=ref_point,
-            minimum=minimum, maximum=maximum,
-            normalize=normalize_y, y_mask=mask,
+            solutions=solutions,
+            ref_point=ref_point,
+            minimum=minimum,
+            maximum=maximum,
+            normalize=normalize_y,
+            y_mask=mask,
         )[0]
 
     @staticmethod
@@ -127,23 +136,39 @@ class MOO:
             norm_ratio: -hv_norm / max_hv_norm  (over candidate set)
         """
         assert regret_type in ["simple", "value", "ratio", "norm_ratio"]
-        dy_valid = solutions.shape[-1] if y_mask is None else y_mask.sum(dim=-1).max().item()
+        dy_valid = (
+            solutions.shape[-1] if y_mask is None else y_mask.sum(dim=-1).max().item()
+        )
         assert regret_type != "simple" or dy_valid == 1
 
         do_single_objective = regret_type == "simple"
         normalize_y = regret_type == "norm_ratio"
 
         current_reward = MOO._reward(
-            do_single_objective=do_single_objective, minimum=minimum, maximum=maximum,
-            ref_point=ref_point, solutions=solutions, normalize_y=normalize_y, mask=y_mask,
+            do_single_objective=do_single_objective,
+            minimum=minimum,
+            maximum=maximum,
+            ref_point=ref_point,
+            solutions=solutions,
+            normalize_y=normalize_y,
+            mask=y_mask,
         )
         optimal_reward = MOO._compute_optimal_reward(
-            regret_type=regret_type, do_single_objective=do_single_objective,
-            minimum=minimum, maximum=maximum, ref_point=ref_point,
-            candidates=candidates, normalize_y=normalize_y, y_mask=y_mask,
-            optimal_value=optimal_value, max_hv=max_hv, max_hv_norm=max_hv_norm,
+            regret_type=regret_type,
+            do_single_objective=do_single_objective,
+            minimum=minimum,
+            maximum=maximum,
+            ref_point=ref_point,
+            candidates=candidates,
+            normalize_y=normalize_y,
+            y_mask=y_mask,
+            optimal_value=optimal_value,
+            max_hv=max_hv,
+            max_hv_norm=max_hv_norm,
         )
-        return MOO._compute_regret_from_rewards(regret_type, current_reward, optimal_reward)
+        return MOO._compute_regret_from_rewards(
+            regret_type, current_reward, optimal_reward
+        )
 
     @staticmethod
     def _compute_optimal_reward(
@@ -169,11 +194,17 @@ class MOO:
         # RATIO / NORM_RATIO: use cached value or compute from candidates
         cached = max_hv if regret_type == RegretType.RATIO.value else max_hv_norm
         if cached is None:
-            assert candidates is not None, "candidates required when max_hv[_norm] not provided"
+            assert (
+                candidates is not None
+            ), "candidates required when max_hv[_norm] not provided"
             cached = MOO._reward(
                 do_single_objective=do_single_objective,
-                minimum=minimum, maximum=maximum, ref_point=ref_point,
-                solutions=candidates, normalize_y=normalize_y, mask=y_mask,
+                minimum=minimum,
+                maximum=maximum,
+                ref_point=ref_point,
+                solutions=candidates,
+                normalize_y=normalize_y,
+                mask=y_mask,
             )
         return cached
 
@@ -209,8 +240,11 @@ def compute_normalized_hv_batch(
     Returns: hv [B], solutions [B, N, max_y_dim], ref_point [B, 1, max_y_dim]
     """
     solutions, ref_point = _get_sols_n_ref_points(
-        solutions=solutions, minimum=minimum, maximum=maximum,
-        ref_point=ref_point, normalize=normalize,
+        solutions=solutions,
+        minimum=minimum,
+        maximum=maximum,
+        ref_point=ref_point,
+        normalize=normalize,
     )
     hv = _compute_hv_batch(ref_point=ref_point, solutions=solutions, y_mask=y_mask)
     return hv, solutions, ref_point
@@ -258,7 +292,9 @@ def _compute_hv(
     # pymoo's HV can segfault on 1D data; handle directly
     if ref_point.shape[0] == 1:
         dominated = solutions[solutions[:, 0] <= ref_point[0]]
-        return 0.0 if len(dominated) == 0 else float(ref_point[0] - dominated[:, 0].min())
+        return (
+            0.0 if len(dominated) == 0 else float(ref_point[0] - dominated[:, 0].min())
+        )
 
     return HV(ref_point=ref_point)(solutions)
 
@@ -298,13 +334,20 @@ def _get_sols_n_ref_points(
     elif ref_point.ndim == 1:
         ref_point = repeat(ref_point, "d -> b d", b=B)
 
-    assert ref_point.shape == (B, D)
+    assert ref_point.shape == (
+        B,
+        D,
+    ), f"ref_point.shape={ref_point.shape}, (B, D)=({B}, {D})"
     ref_point = ref_point.unsqueeze(1)  # [B, 1, D]
 
     if normalize:
         input_bounds = torch.stack([minimum, maximum], dim=-1)
-        solutions = transform(data=solutions, inp_bounds=input_bounds, transform_method="normalize")
-        ref_point = transform(data=ref_point, inp_bounds=input_bounds, transform_method="normalize")
+        solutions = transform(
+            data=solutions, inp_bounds=input_bounds, transform_method="normalize"
+        )
+        ref_point = transform(
+            data=ref_point, inp_bounds=input_bounds, transform_method="normalize"
+        )
 
     return solutions, ref_point.to(solutions.device)
 

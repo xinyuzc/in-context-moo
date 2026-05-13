@@ -142,6 +142,29 @@ class OptimizationConfig:
     sampling_mode: str = "full"
     num_reweighted_samples: int = 2048
 
+    # Two-pass adaptive query set (Phase 1: deployment-loop only)
+    use_adaptive_query_set: bool = False
+    adaptive_top_k: int = 8
+    adaptive_samples_per_top: int = 32
+    # Trust-region radius as a multiple of Q0's average nearest-neighbour
+    # spacing per dim (i.e. range_width * (1/d)^(1/dx)). Values >= 1 let
+    # cubes bridge gaps between adjacent Q0 grid points; smaller values keep
+    # cubes purely local. For "gaussian" this is the std multiplier; for
+    # "cube_sobol" this is the cube-half-width multiplier.
+    adaptive_sigma_frac: float = 3.0
+    # Stochastic top-K: sample K without replacement from softmax(logits / T).
+    # 0.0 = deterministic topk (legacy); higher = more diverse seeds.
+    adaptive_topk_temperature: float = 0.0
+    # Trust-region geometry around each top-K seed: "cube_sobol" draws Sobol
+    # samples uniformly from the (clipped) cube, "gaussian" draws from N(seed, std).
+    adaptive_trust_region: str = "cube_sobol"
+    use_adaptive_global_region: bool = True
+    # Epsilon (sample-vs-argmax) for pass-2 over Q1. 1.0 = always sample
+    # (preserves prior hardcoded behavior; useful at train time to keep
+    # exploration on the refined candidate set). At deployment, set 0.0 to take
+    # the argmax of Q1's policy scores. Independent from outer `epsilon`.
+    adaptive_pass2_epsilon: float = 1.0
+
     def __post_init__(self):
         if self.T is not None:
             assert isinstance(self.T, int) and self.T > 0, "T must be a positive integer."
@@ -174,6 +197,39 @@ class OptimizationConfig:
         "num_initial_points": "Nspt",
         "num_samples": "Nsmp",
     }
+
+    # Allowlist of fields that contribute to the run-identity filename.
+    # Adding new fields here is opt-in: forgetting to list one keeps it OUT of
+    # the path so old data still loads under the same folder name.
+    filename_fields: ClassVar[List[str]] = [
+        "use_grid_sampling",
+        "use_fixed_query_set",
+        "use_factorized_policy",
+        "use_time_budget",
+        "batch_size",
+        "T",
+        "min_T",
+        "max_T",
+        "regret_type",
+        "num_initial_points",
+        "random_num_initial",
+        "num_samples",
+        "dim_mask_gen_mode",
+        "num_query_points",
+        "single_obs_x_dim",
+        "single_obs_y_dim",
+        "read_cache",
+        "write_cache",
+        "epsilon",
+        "use_curriculum",
+        "use_logit_mask",
+        "q",
+        "fantasy",
+        "cost_mode",
+        "cost",
+        "sampling_mode",
+        "num_reweighted_samples",
+    ]
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

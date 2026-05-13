@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=gp_dx2
+#SBATCH --job-name=gp_dx3
 #SBATCH --mem=8G
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
@@ -17,21 +17,21 @@ python --version
 CUDA_LAUNCH_BLOCKING=1 python generate_data.py  --config-name=generate_data \
     experiment.mode=train \
     generate.filename="gp_${SLURM_ARRAY_TASK_ID}" \
-    generate.x_dim=2 \
+    generate.x_dim=4 \
     generate.y_dim=1 \
     generate.num_datasets=100000 
 
 CUDA_LAUNCH_BLOCKING=1 python generate_data.py  --config-name=generate_data \
     experiment.mode=train \
     generate.filename="gp_${SLURM_ARRAY_TASK_ID}" \
-    generate.x_dim=2 \
+    generate.x_dim=4 \
     generate.y_dim=2 \
     generate.num_datasets=100000 
 
 CUDA_LAUNCH_BLOCKING=1 python generate_data.py  --config-name=generate_data \
     experiment.mode=train \
     generate.filename="gp_${SLURM_ARRAY_TASK_ID}" \
-    generate.x_dim=2 \
+    generate.x_dim=4 \
     generate.y_dim=3 \
     generate.num_datasets=100000 
 

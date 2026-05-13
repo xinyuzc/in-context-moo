@@ -11,6 +11,20 @@ import torch
 import wandb
 
 
+def _filename_dict(config) -> dict:
+    """Project a config to the dict used to build its run-identity folder name.
+
+    If the config defines a `filename_fields` ClassVar (an allowlist of field names),
+    only those fields contribute to the path. Otherwise fall back to all fields, so
+    configs that haven't opted into the allowlist behave as before.
+    """
+    full = asdict(config)
+    fields = getattr(type(config), "filename_fields", None)
+    if fields is None:
+        return full
+    return {k: full[k] for k in fields if k in full}
+
+
 def _convert_value_to_str(val):
     """Convert a value to a string representation."""
     if isinstance(val, str):
@@ -123,7 +137,7 @@ def save_fig(
     if fig is None:
         log(f"    Figure is None. Skipping save.")
         return None
-    folder_name = params_to_string(asdict(config))
+    folder_name = params_to_string(_filename_dict(config))
     fig_path = osp.join(path, folder_name, f"{filename}.pdf")
     log(f"    Full path:\t{fig_path}")
 
@@ -158,7 +172,7 @@ def save_data(
     if data is None:
         log(f"    Data is None. Skipping save.")
         return None
-    folder_name = params_to_string(asdict(config))
+    folder_name = params_to_string(_filename_dict(config))
     ext = "pkl" if use_pickle else "pt"
     data_path = osp.join(path, folder_name, f"{filename}.{ext}")
 

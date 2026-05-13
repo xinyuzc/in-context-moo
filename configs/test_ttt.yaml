@@ -1,0 +1,145 @@
+defaults:
+  - default
+  - data
+  - model
+  - _self_
+
+extra:
+  ckpt_name: ckpt.tar
+  suffix_segment: test_time_training
+
+experiment:
+  seed: 0
+  mode: test
+  task: optimization
+  model_name: TAMO
+  device: cuda
+  expid: null
+  resume: true
+  override: true
+  log_to_wandb: false
+
+data:
+  function_name: dx2_dy2
+  data_id: null
+  dim_scatter_mode: random_k
+  sigma: 0.0
+  scene: ship
+
+prediction:
+  batch_size: 32
+  nc: null
+  min_nc: 2
+  max_nc: 50
+  read_cache: true
+
+train_optimization: 
+  use_grid_sampling: false
+  use_fixed_query_set: true
+  use_factorized_policy: false
+  use_time_budget: true
+  use_curriculum: false
+  batch_size: 4
+  num_samples: 4
+  num_query_points: 256
+  T: 100
+  min_T: 20
+  max_T: 100
+  regret_type: norm_ratio
+  num_initial_points: 1
+  dim_mask_gen_mode: full
+  single_obs_x_dim: null
+  single_obs_y_dim: null
+  read_cache: false
+  write_cache: false
+  epsilon: 1.0
+  use_logit_mask: false
+  sampling_mode: full
+
+  use_adaptive_query_set: false
+  adaptive_top_k: 8
+  adaptive_samples_per_top: 32
+  adaptive_sigma_frac: 3.0  # gaussian std OR cube half-width as a multiple of Q0 nn-spacing
+  adaptive_topk_temperature: 0.0
+  adaptive_trust_region: cube_sobol  # "cube_sobol" | "gaussian"
+
+
+
+optimization:
+  use_grid_sampling: true
+  use_fixed_query_set: false
+  use_time_budget: true
+  use_factorized_policy: false
+  batch_size: 1
+  T: 100
+  min_T: 10
+  max_T: 100
+  regret_type: ratio
+  num_initial_points: 1
+  num_samples: 1
+  dim_mask_gen_mode: full
+  single_obs_x_dim: null
+  single_obs_y_dim: null
+  read_cache: true
+  write_cache: true
+  epsilon: 0.0
+  num_query_points: 2048
+  fantasy: false
+  q: 1
+  cost_mode: false
+  cost: 1.0
+  
+  use_logit_mask: false
+  sampling_mode: full
+  num_reweighted_samples: 2048
+
+  use_adaptive_query_set: false
+  adaptive_top_k: 8
+  adaptive_samples_per_top: 32
+  adaptive_sigma_frac: 3.0  # gaussian std OR cube half-width as a multiple of Q0 nn-spacing
+  adaptive_topk_temperature: 0.0
+  adaptive_trust_region: cube_sobol  # "cube_sobol" | "gaussian"
+  use_adaptive_global_region: true
+
+log:
+  plot_enabled: true
+  plot_nc_list: [10, 50, 100]
+  plot_per_n_steps: 25
+
+loss:
+  use_cumulative_rewards: true
+  batch_standardize: true
+  clip_rewards: true
+  loss_weight: 1.0
+  discount_factor: 0.99
+  max_norm: 1.0
+
+test_time:
+  enabled: true
+  mode: policy                # "policy" | "predictor"
+  num_start_ttt: 20
+  num_obs: 20
+  data_kernel_type_list: [rbf, matern32, matern52]
+  num_gps: 4
+  num_fns: 8
+  num_test_points: 256
+  use_independent_sampler: false  # default false = fully-Bayesian NUTS; true = per-task ExactGP with prior-sampled hyperparams
+  use_true_function: false     # if true, TTT pool = true test function on a Sobol grid (oracle sanity check)
+  num_epoch: 10
+  optimizer_type: adam        # "adam" | "adamw"
+  optimize_parameters: policy  # "policy" | "decoder" | "encoder" | "all"
+  lr: 1.0e-3
+  weight_decay: 1.0e-2
+  min_nc: 2                   # predictor mode only
+  max_nc: 50                  # predictor mode only
+  prompt_K: 8
+  prompt_init: random
+
+  # Softmax-reweighted REINFORCE (entropic objective).
+  # When use_softmax_reweighted_loss=true (policy mode only), the standardized
+  # per-step REINFORCE in forwards.compute_policy_loss is replaced with a per-
+  # trajectory softmax(beta * R) weighting over the batch.
+  use_softmax_reweighted_loss: false
+  softmax_beta: 1.0
+  softmax_reduction: discounted_sum   # "final" | "sum" | "discounted_sum"
+

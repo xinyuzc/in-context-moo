@@ -1,12 +1,15 @@
 #!/bin/bash -l
-#SBATCH --job-name=DX12345_DY123
+#SBATCH --job-name=DX12345_DY123_Q256
 #SBATCH --mem=2G
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
-#SBATCH --time=00:05:00
-#SBATCH --array=0-29
-#SBATCH --output=outputs/test/%x_%j.output
-#SBATCH --error=outputs/test/%x_%j.err
+#SBATCH --time=00:30:00
+#SBATCH --array=0-4
+
+#SBATCH --output=outputs/test/%x/%j.output
+#SBATCH --error=outputs/test/%x/%j.err
+
+
 
 module load mamba
 source activate tamo
@@ -20,15 +23,18 @@ python --version
 plot_enabled=True
 
 # Experiment
-task=optimization
-override=True
 CKPT_NAMES=("ckpt.tar")
 suffix_segment=null
 
 # Optimization
-T=100
 regret_type="ratio"
-num_query_points=2048
+num_query_points=2048 
+use_fixed_query_set=true
+use_logit_mask=true 
+
+# Reweighted query set
+sampling_mode=full
+num_reweighted_samples=2048
 
 # Cache
 opt_read_cache=True
@@ -49,7 +55,7 @@ scene=null
 data_id=null
 
 # functions to test 
-FUNCTIONS=("dx2_dy2" "AckleyRosenbrock" "AckleyRastrigin" "BraninCurrin")
+FUNCTIONS=("BraninCurrin" "AckleyRastrigin" "AckleyRosenbrock" "LaserPlasma")
 
 ## ============================================= ##
 ##           Experiment Configurations           ##
@@ -86,18 +92,20 @@ expid=DX12345_DY123
 ##                   Run Test                    ##
 ## ============================================= ##
 
+NUM=6  # number of seeds per job
 
 for ckpt_name in "${CKPT_NAMES[@]}"; do
     for function_name in "${FUNCTIONS[@]}"; do
-        CUDA_LAUNCH_BLOCKING=1 python test.py --config-name=test \
-            experiment.seed=${SLURM_ARRAY_TASK_ID} \
+        for i in $(seq 0 $((NUM - 1))); do
+            seed=$((SLURM_ARRAY_TASK_ID * NUM + i))
+            CUDA_LAUNCH_BLOCKING=1 python test.py --config-name=test \
+            experiment.seed=${seed} \
             model.max_x_dim=${max_x_dim} \
+            data.max_x_dim=${max_x_dim} \
             data.function_name="${function_name}" \
             data.data_id=${data_id} \
             data.scene=${scene} \
             experiment.expid="${expid}" \
-            experiment.task="${task}" \
-            experiment.override=${override} \
             optimization.T=${T} \
             optimization.dim_mask_gen_mode=${dim_mask_gen_mode} \
             optimization.single_obs_x_dim=${single_obs_x_dim} \
@@ -106,13 +114,18 @@ for ckpt_name in "${CKPT_NAMES[@]}"; do
             optimization.write_cache=${opt_write_cache} \
             optimization.regret_type=${regret_type} \
             optimization.num_query_points=${num_query_points} \
+            optimization.use_fixed_query_set=${use_fixed_query_set} \
+            optimization.use_logit_mask=${use_logit_mask} \
             optimization.cost=${cost} \
             optimization.cost_mode=${cost_mode} \
             optimization.q=${q} \
             optimization.fantasy=${fantasy} \
+            optimization.sampling_mode=${sampling_mode} \
+            optimization.num_reweighted_samples=${num_reweighted_samples} \
             prediction.read_cache=${pred_read_cache} \
             log.plot_enabled=${plot_enabled} \
             extra.ckpt_name=${ckpt_name} \
-            extra.suffix_segment=${suffix_segment} 
-    done
-done
+            extra.suffix_segment=${suffix_segment}
+        done  # seed loop
+    done  # function loop
+done  # ckpt loop

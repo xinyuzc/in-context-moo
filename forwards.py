@@ -54,6 +54,7 @@ class QueryResult:
     q_chunk_mask: Tensor  # [n, max_x_dim]
     infer_time: float
     logit_mask: Optional[Tensor]  # [B, n, d]
+    q_chunk_adaptive_only: Optional[Tensor] = None  # [K*m, max_x_dim], adaptive cubes only (no Q0)
 
     def _as_tuple(self):
         return (
@@ -66,6 +67,7 @@ class QueryResult:
             self.q_chunk_mask,
             self.infer_time,
             self.logit_mask,
+            self.q_chunk_adaptive_only,
         )
 
     def __iter__(self):
@@ -113,6 +115,7 @@ def _reweighted_sample(
     d: int,
     sampling_mode: str = SamplingMode.REWEIGHTED.value,
     num_samples: int = 4096,
+    t: int = 0,
 ) -> Tuple[Tensor, Tensor]:
     """Reweigted sample the queries by taking the top-d candidates.
     p(y | D_c) =
@@ -151,6 +154,7 @@ def _reweighted_sample(
         input_bounds=input_bounds,
         use_grid_sampling=opt_config.use_grid_sampling,
         use_factorized_policy=opt_config.use_factorized_policy,
+        seed=int(t) * int(num_samples),
     )
 
     # Expand batch dim
@@ -234,8 +238,13 @@ def _prepare_query_chunks(
     d,
     query_chunks,
     q_x_mask,
+    t: int = 0,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    """Returns (query_chunks, query_chunks_expanded, query_x_mask)."""
+    """Returns (query_chunks, query_chunks_expanded, query_x_mask).
+
+    `t` (current cost step) is used as a per-step Sobol-skip multiplier so
+    fresh-Q0 paths produce non-overlapping Sobol windows step-to-step.
+    """
     B, _, dx_max = x_ctx.shape
     if opt_config.sampling_mode == SamplingMode.FULL.value:
         if query_chunks is None or not opt_config.use_fixed_query_set:
@@ -247,6 +256,7 @@ def _prepare_query_chunks(
                 input_bounds=input_bounds,
                 use_grid_sampling=opt_config.use_grid_sampling,
                 use_factorized_policy=opt_config.use_factorized_policy,
+                seed=int(t) * int(d),
             )
 
         expanded = (
@@ -268,6 +278,7 @@ def _prepare_query_chunks(
             d=d,
             sampling_mode=opt_config.sampling_mode,
             num_samples=opt_config.num_reweighted_samples,
+            t=t,
         )
         return None, expanded, q_x_mask
 
@@ -359,6 +370,7 @@ def select_next_query(
         d,
         query_chunks,
         query_x_mask,
+        t=t,
     )
 
     n = query_x_mask.shape[0]
@@ -367,7 +379,7 @@ def select_next_query(
     )
 
     # Sanity check: disable logit mask if reweighted sampling, or query set is smaller than budget
-    use_logit_mask = False if n < T else opt_config.use_logit_mask
+    use_logit_mask = False if d < T else opt_config.use_logit_mask
 
     if use_logit_mask:
         if logit_mask is None:

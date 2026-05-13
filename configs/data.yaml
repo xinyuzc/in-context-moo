@@ -2,8 +2,8 @@ data:
   function_name: gp
   dim_scatter_mode: random_k
   sigma: 0.0
-  x_dim_list: [1]
-  y_dim_list: [1]
+  x_dim_list: [1,2,3]
+  y_dim_list: [1,2]
   max_x_dim: 4
   max_y_dim: 3
   data_id: null
@@ -18,5 +18,5 @@ data:
   p_iso: 0.5
   standardize: true
   jitter: 1e-3
-  max_tries: 6
+  max_tries: 10
   scene: null

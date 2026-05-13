@@ -185,6 +185,7 @@ def _should_plot(cost_used, cost_total, plot_per_n_unit_cost, plot_enabled, init
 def _generate_visualizations(
     model, x_ctx, y_ctx_scaled, x_tar, y_tar_scaled,
     x_mask_exp, y_mask_exp, y_mask_tar_exp, read_cache, y_mask_history=None,
+    overlay=None,
 ) -> Dict[str, Any]:
     """Return {'mean': fig, 'std': fig} prediction plots."""
     nc = x_ctx.shape[1]
@@ -193,7 +194,7 @@ def _generate_visualizations(
             model=model, nc=nc, xc=x_ctx, yc=y_ctx_scaled, x=x_tar, y=y_tar_scaled,
             x_mask=x_mask_exp, y_mask=y_mask_exp, y_mask_tar=y_mask_tar_exp,
             read_cache=read_cache, y_mask_history=y_mask_history,
-            plot_mean=plot_mean, plot_order=True,
+            plot_mean=plot_mean, plot_order=True, overlay=overlay,
         )
         for plot_mean in [True, False]
     }
@@ -210,6 +211,7 @@ def run_prediction_on_test_function(
     plot_enabled: bool = False,
     y_mask_history: Optional[Tensor] = None,
     seed: int = 0,
+    overlay: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Tensor, Tensor, Optional[Dict[str, Any]]]:
     """Evaluate model predictions at a single optimization step.
 
@@ -253,6 +255,7 @@ def run_prediction_on_test_function(
         x_tar=x_tar, y_tar_scaled=y_tar_scaled,
         x_mask_exp=x_mask_exp, y_mask_exp=y_mask_exp, y_mask_tar_exp=y_mask_tar_exp,
         read_cache=read_cache, y_mask_history=y_mask_history,
+        overlay=overlay,
     ) if plot_enabled else None
 
     return nll_t, mse_t, figs

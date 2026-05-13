@@ -16,7 +16,7 @@ experiment:
   device: cuda
   expid: null
   resume: true
-  override: false
+  override: true
   log_to_wandb: false
 
 data:
@@ -35,7 +35,7 @@ prediction:
 
 optimization:
   use_grid_sampling: true
-  use_fixed_query_set: true
+  use_fixed_query_set: false
   use_time_budget: true
   use_factorized_policy: false
   batch_size: 1
@@ -57,7 +57,7 @@ optimization:
   cost_mode: false
   cost: 1.0
   
-  use_logit_mask: true
+  use_logit_mask: false
   sampling_mode: full
   num_reweighted_samples: 2048
 

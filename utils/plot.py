@@ -1,6 +1,6 @@
 """Plot functions for optimization, prediction, and metric visualization."""
 
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import torch
 from torch import Tensor
@@ -564,6 +564,32 @@ def plot_optimization(
     return fig
 
 
+def _draw_trust_regions_1d(ax: Axes, top_x: np.ndarray, std: float):
+    """Overlay σ-bands and centers on a 1-D axis. top_x: [K], std: scalar."""
+    for x_k in top_x:
+        ax.axvspan(x_k - std, x_k + std, alpha=0.12, color="orange", zorder=0)
+        ax.axvline(x_k, color="orange", alpha=0.6, linestyle="--", linewidth=0.8, zorder=1)
+
+
+def _draw_trust_regions_2d(ax: Axes, top_x: np.ndarray, std: np.ndarray):
+    """Overlay axis-aligned σ-ellipses + centers on a 2-D axis.
+    top_x: [K, 2], std: [2]."""
+    from matplotlib.patches import Ellipse
+
+    ax.scatter(
+        top_x[:, 0], top_x[:, 1],
+        color="orange", marker="*", s=80,
+        edgecolor="black", zorder=10,
+    )
+    for k in range(top_x.shape[0]):
+        ax.add_patch(Ellipse(
+            xy=(top_x[k, 0], top_x[k, 1]),
+            width=2 * std[0], height=2 * std[1],
+            facecolor="none", edgecolor="orange",
+            linewidth=1.0, alpha=0.7, zorder=9,
+        ))
+
+
 def _plot_1d_prediction(
     mean: np.ndarray,  # [N, 1]
     std: np.ndarray,  # [N, 1]
@@ -576,7 +602,9 @@ def _plot_1d_prediction(
     x_bounds: Optional[np.ndarray] = None,  # [2, 1]
     grid_res: int = GRID_RES,
     is_y_observed: Optional[np.ndarray] = None,  # [nc, 1]
-    num_samples: int= 10
+    num_samples: int= 10,
+    overlay_x: Optional[np.ndarray] = None,  # [K, 1]
+    overlay_std: Optional[np.ndarray] = None,  # [1]
 ):
     """Plot prediction for 1-D x and 1-D y."""
     if is_y_observed is not None:
@@ -709,6 +737,10 @@ def _plot_1d_prediction(
     ax_pred.set_xlabel("x")
     ax_pred.set_ylabel("y")
 
+    if overlay_x is not None and overlay_std is not None:
+        _draw_trust_regions_1d(ax_true, overlay_x[:, 0], float(overlay_std[0]))
+        _draw_trust_regions_1d(ax_pred, overlay_x[:, 0], float(overlay_std[0]))
+
 
 def _plot_2d_prediction(
     mean: np.ndarray,  # [N, 1]
@@ -725,6 +757,8 @@ def _plot_2d_prediction(
     grid_res: int = GRID_RES,
     plot_mean: bool = True,
     plot_order: bool = False,
+    overlay_x: Optional[np.ndarray] = None,  # [K, 2]
+    overlay_std: Optional[np.ndarray] = None,  # [2]
 ):
     def _reduce_y_dim(tensor):
         if tensor is None:
@@ -792,6 +826,10 @@ def _plot_2d_prediction(
         edgecolor="white",
     )
 
+    if overlay_x is not None and overlay_std is not None:
+        _draw_trust_regions_2d(ax_true, overlay_x, overlay_std)
+        _draw_trust_regions_2d(ax_pred, overlay_x, overlay_std)
+
 
 def plot_prediction(
     mean: Tensor,
@@ -807,6 +845,7 @@ def plot_prediction(
     grid_res: int = GRID_RES,
     plot_mean: bool = True,
     plot_order: bool = False,
+    overlay: Optional[Dict[str, Any]] = None,  # {'top_q': [K, dx_max], 'std': [dx_max]}
     **kwargs,
 ) -> Figure:
     """Plot predictions for 1 dimensional or 2 dimensional x.
@@ -851,6 +890,11 @@ def plot_prediction(
         x_bounds_np = np.array(x_bounds, dtype=np.float32)
         assert x_bounds_np.shape == (dx_max, 2), f"{x_bounds_np.shape} != ({dx_max}, 2)"
 
+    overlay_top_q_np = overlay_std_np = None
+    if overlay is not None:
+        overlay_top_q_np = tnp(overlay["top_q"])  # [K, dx_max]
+        overlay_std_np = tnp(overlay["std"])      # [dx_max]
+
     # Figure: [(2 * B), dy_max]
     nrows = 2 * B
     ncols = dy_max
@@ -876,6 +920,11 @@ def plot_prediction(
         if x_bounds_np is not None:
             x_bounds_valid = x_bounds_np[x_mask[b], :]
             assert x_bounds_valid.ndim == 2, f"{x_bounds_valid}"
+
+        overlay_x_valid = overlay_std_valid = None
+        if overlay_top_q_np is not None:
+            overlay_x_valid = overlay_top_q_np[:, x_mask[b]]   # [K, dx_valid]
+            overlay_std_valid = overlay_std_np[x_mask[b]]      # [dx_valid]
 
         has_plot_ylabel = False
         for i in range(dy_max):
@@ -911,6 +960,8 @@ def plot_prediction(
                     ax_pred=ax_pred,
                     x_bounds=x_bounds_valid,
                     is_y_observed=is_yi_observed,
+                    overlay_x=overlay_x_valid,
+                    overlay_std=overlay_std_valid,
                 )
             elif x_valid.shape[1] == 2:
                 _plot_2d_prediction(
@@ -928,6 +979,8 @@ def plot_prediction(
                     is_y_observed=is_yi_observed,
                     plot_mean=plot_mean,
                     plot_order=plot_order,
+                    overlay_x=overlay_x_valid,
+                    overlay_std=overlay_std_valid,
                 )
 
                 ax_true.set_title(f"Objective {i+1}")
@@ -1093,6 +1146,7 @@ def plot_prediction_batch(
     y_mask_history: Optional[Tensor] = None,  # [nc, dy_max]
     plot_mean: bool = True,
     plot_order: bool = False,
+    overlay: Optional[Dict[str, Any]] = None,
 ) -> Figure:
     """Plot predictions of batches.
 
@@ -1142,6 +1196,7 @@ def plot_prediction_batch(
         y_mask_history=y_mask_history,
         plot_mean=plot_mean,
         plot_order=plot_order,
+        overlay=overlay,
     )
 
     del x_plot, y_plot, out, mean, std

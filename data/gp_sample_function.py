@@ -13,16 +13,193 @@ import torch
 from torch import Tensor
 import numpy as np
 
-from data.sampler import gp_sampler, sample_nc
+from gpytorch.mlls import SumMarginalLogLikelihood
+
+from gpytorch.models import IndependentModelList
+from gpytorch.likelihoods import GaussianLikelihood, LikelihoodList
+from gpytorch.settings import fast_pred_var, cholesky_jitter, cholesky_max_tries
+
+from data.sampler import (
+    gp_sampler,
+    sample_nc,
+    _get_data_kernel,
+    _sample_lengthscale,
+    _check_samples,
+    DATA_KERNEL_TYPE_LIST,
+    SAMPLE_KERNEL_WEIGHTS,
+    L_RANGE,
+    STD_RANGE,
+    P_ISO,
+    JITTER,
+    MAX_TRIES,
+)
+from data.base.gpytorch_utils import ExactGPModel, sample_orthonormal_matrix
 from data.base.preprocessing import transform, make_range_tensor
 from data.function_sampling import sample_domain, generate_sobol_samples
 from data.base.masking import generate_dim_mask, restore_by_mask, gather_by_indices
 from data.moo import MOO
 from data.sampler_global_opt import OptimizationSampler
+from data.gp_nuts_sampler import multi_output_gp_posterior_sampler_nuts
 from utils.dataclasses import DataConfig
 from utils.config import get_train_y_range
 
 NUM_SAMPLES = 1
+
+
+def multi_output_gp_posterior_sampler(
+    x_ctx: Tensor,                                          # [n_ctx, x_dim]
+    y_ctx: Tensor,                                          # [n_ctx, num_tasks]
+    x_range: Union[List, Tensor],
+    num_datapoints: int,
+    data_kernel_type_list: List = DATA_KERNEL_TYPE_LIST,
+    sample_kernel_weights: List = SAMPLE_KERNEL_WEIGHTS,
+    lengthscale_range: List = L_RANGE,
+    std_range: List = STD_RANGE,
+    p_iso: float = P_ISO,
+    grid: bool = False,
+    device: str = "cuda",
+    x: Optional[Tensor] = None,
+    jitter: float = JITTER,
+    max_tries: int = MAX_TRIES,
+    optimize_hyperparams: bool = False,
+    **kwargs,
+):
+    """Sample from independent multi-output GP posteriors, one per task.
+
+    Mirrors `multi_output_gp_prior_sampler` in data/sampler.py
+    
+    Args:
+        x_ctx: [n_ctx, x_dim] real context inputs (shared across tasks).
+        y_ctx: [n_ctx, num_tasks] real context outputs.
+        x_range, num_datapoints, grid: passed to `generate_sobol_samples` to
+            build the test grid `x` if `x` is None.
+        x: [num_datapoints, x_dim] optional precomputed test inputs.
+        Other args: same role as in `multi_output_gp_prior_sampler`.
+
+    Returns:
+        (x, y) with shapes [num_datapoints, x_dim] and [num_datapoints, num_tasks],
+        or (None, None) if the sample fails the validity check.
+    """
+    assert lengthscale_range[0] > 0 and lengthscale_range[1] > lengthscale_range[0]
+    assert std_range[0] > 0 and std_range[1] > std_range[0]
+    assert x_ctx.dim() == 2 and y_ctx.dim() == 2
+    assert x_ctx.shape[0] == y_ctx.shape[0], "x_ctx / y_ctx must share n_ctx"
+
+    x_dim = x_ctx.shape[-1]
+    num_tasks = y_ctx.shape[-1]
+
+    x_range = make_range_tensor(x_range, x_dim).to(device)
+    x_ctx = x_ctx.to(device)
+    y_ctx = y_ctx.to(device)
+
+    # Test inputs
+    if x is None:
+        x = generate_sobol_samples(
+            x_range=x_range, num_datapoints=num_datapoints, grid=grid
+        )
+    x = x.to(device)
+
+    # Sample data kernel per task
+    data_kernel_type = random.choices(
+        population=data_kernel_type_list, weights=sample_kernel_weights, k=num_tasks
+    )
+
+    models = []
+    likelihoods = []
+
+    for t, kernel_type in enumerate(data_kernel_type):
+        # Sample lengthscale: [x_dim]
+        lengthscale = _sample_lengthscale(
+            x_dim=x_dim, lengthscale_range=lengthscale_range, p_iso=p_iso
+        ).to(device)
+
+        # Sample std: [1]
+        std = torch.rand(1, device=device)
+        std = std * (std_range[1] - std_range[0]) + std_range[0]
+
+        # Sample data kernel
+        data_kernel = _get_data_kernel(kernel_type=kernel_type, x_dim=x_dim)
+        if kernel_type == "rotated_ard":
+            sampled_R = sample_orthonormal_matrix(x_dim).to(device)
+            data_kernel.raw_lengthscales.data = lengthscale
+            data_kernel.R.data = sampled_R
+        else:
+            data_kernel.lengthscale = lengthscale
+
+        # Conditioned model for task t
+        likelihood = GaussianLikelihood()
+        likelihoods.append(likelihood)
+        model = ExactGPModel(
+            kernel=data_kernel,
+            likelihood=likelihood,
+            train_x=x_ctx,
+            train_y=y_ctx[:, t],
+        )
+        model.covar_module.outputscale = std**2
+        models.append(model)
+
+    model = IndependentModelList(*models)
+    likelihood = LikelihoodList(*likelihoods)
+
+    model.to(x)
+    likelihood.to(x)
+
+    if optimize_hyperparams:
+        # Joint MLE across all tasks (SumMarginalLogLikelihood)
+        model.train()
+        likelihood.train()
+        mll = SumMarginalLogLikelihood(likelihood, model)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+        train_inputs = [m.train_inputs[0] for m in model.models]
+        train_targets = [m.train_targets for m in model.models]
+        n_opt_steps = 50
+        with cholesky_jitter(jitter), cholesky_max_tries(max_tries):
+            for _ in range(n_opt_steps):
+                optimizer.zero_grad()
+                outputs = model(*train_inputs)
+                loss = -mll(outputs, train_targets)
+                loss.backward()
+                optimizer.step()
+
+    model.eval()
+    likelihood.eval()
+
+    # Sample from the posterior at x
+    with torch.no_grad(), fast_pred_var(), cholesky_jitter(jitter), cholesky_max_tries(
+        max_tries
+    ):
+        post_dist_list = model(*[x for _ in range(num_tasks)])
+
+        ys = [
+            post_dist.sample(torch.Size([1])).squeeze(0)
+            for post_dist in post_dist_list
+        ]
+        y = torch.stack(ys, dim=-1)  # [num_datapoints, num_tasks]
+
+    # Validity check (matches prior sampler)
+    is_valid = _check_samples(
+        x=x,
+        y=y,
+        kernel_type_list=[
+            submodel.covar_module.base_kernel for submodel in model.models
+        ],
+        lengthscale_list=[
+            submodel.covar_module.base_kernel.lengthscale for submodel in model.models
+        ],
+        std_list=[submodel.covar_module.outputscale for submodel in model.models],
+        covar_list=[submodel.covar_module(x).evaluate() for submodel in model.models],
+    )
+
+    # Free up memory
+    model = model.cpu()
+    likelihood = likelihood.cpu()
+    model.eval()
+    del model, likelihood
+
+    if not is_valid:
+        return None, None
+
+    return x, y
 
 
 def prepare_prediction_batches(
@@ -112,6 +289,14 @@ class GPSampleFunction:
         num_samples: int = NUM_SAMPLES,
         device: str = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         restore_full_dim_later: bool = True,
+        x_ctx: Optional[Tensor] = None,
+        y_ctx: Optional[Tensor] = None,
+        kernel_types: Optional[List[str]] = None,
+        num_gps: int = 1,
+        num_fns: int = 1,
+        use_independent_sampler: bool = False,
+        optimize_hyperparams: bool = False,
+        nuts_warmup: int = 128,
         **kwargs,
     ):
         assert not use_factorized_policy, "use_factorize_policy=True is not supported."
@@ -122,29 +307,58 @@ class GPSampleFunction:
         self.max_x_dim = data_config.max_x_dim
         self.max_y_dim = data_config.max_y_dim
 
-        x, y, chunks_, chunk_mask_ = self.sample_from_syn(
-            x_dim=x_dim,
-            y_dim=y_dim,
-            batch_size=batch_size,
-            d=d,
-            use_grid_sampling=use_grid_sampling,
-            use_factorized_policy=use_factorized_policy,
-            x_range=data_config.x_range,
-            sampler_list=data_config.sampler_list,
-            sampler_weights=data_config.sampler_weights,
-            data_kernel_type_list=data_config.data_kernel_type_list,
-            sample_kernel_weights=data_config.sample_kernel_weights,
-            lengthscale_range=data_config.lengthscale_range,
-            std_range=data_config.std_range,
-            min_rank=data_config.min_rank,
-            max_rank=data_config.max_rank,
-            p_iso=data_config.p_iso,
-            jitter=data_config.jitter,
-            max_tries=data_config.max_tries,
-            standardize=data_config.standardize,
-            device=device,
-            sampler_type=data_config.function_name,
-        )
+        x_ctx_tiled, y_ctx_tiled = None, None
+        if x_ctx is not None and y_ctx is not None:
+            # y_ctx is already on the model's training scale, so the GP posterior
+            # samples inherit that scale. Re-standardising per draw destroys the
+            # GP's variance structure and makes y_ctx and the synthetic targets
+            # disagree about the function value at the conditioning points.
+            x, y, chunks_, chunk_mask_, x_ctx_tiled, y_ctx_tiled = (
+                self.sample_from_post(
+                    x_ctx=x_ctx,
+                    y_ctx=y_ctx,
+                    num_test_points=d,
+                    num_fns=num_fns,
+                    num_gps=num_gps,
+                    kernel_types=kernel_types or data_config.data_kernel_type_list,
+                    x_range=data_config.x_range,
+                    use_grid_sampling=use_grid_sampling,
+                    device=device,
+                    use_independent_sampler=use_independent_sampler,
+                    optimize_hyperparams=optimize_hyperparams,
+                    nuts_warmup=nuts_warmup,
+                    lengthscale_range=data_config.lengthscale_range,
+                    std_range=data_config.std_range,
+                    p_iso=data_config.p_iso,
+                    jitter=data_config.jitter,
+                    max_tries=data_config.max_tries,
+                    sample_kernel_weights=data_config.sample_kernel_weights,
+                )
+            )
+        else:
+            x, y, chunks_, chunk_mask_ = self.sample_from_syn(
+                x_dim=x_dim,
+                y_dim=y_dim,
+                batch_size=batch_size,
+                d=d,
+                use_grid_sampling=use_grid_sampling,
+                use_factorized_policy=use_factorized_policy,
+                x_range=data_config.x_range,
+                sampler_list=data_config.sampler_list,
+                sampler_weights=data_config.sampler_weights,
+                data_kernel_type_list=data_config.data_kernel_type_list,
+                sample_kernel_weights=data_config.sample_kernel_weights,
+                lengthscale_range=data_config.lengthscale_range,
+                std_range=data_config.std_range,
+                min_rank=data_config.min_rank,
+                max_rank=data_config.max_rank,
+                p_iso=data_config.p_iso,
+                jitter=data_config.jitter,
+                max_tries=data_config.max_tries,
+                standardize=data_config.standardize,
+                device=device,
+                sampler_type=data_config.function_name,
+            )
 
         # Generate valid dim masks: [max_x_dim], [max_y_dim]
         self.x_mask, _ = generate_dim_mask(
@@ -180,26 +394,45 @@ class GPSampleFunction:
         self._x = self.repeat_along_batch(x, self._num_samples)
         self._y = self.repeat_along_batch(y, self._num_samples)
 
-        # Pre-compute max hypervolume for regret calculation
+        if x_ctx_tiled is not None:
+            x_ctx_tiled = self.repeat_along_batch(x_ctx_tiled, self._num_samples)
+            y_ctx_tiled = self.repeat_along_batch(y_ctx_tiled, self._num_samples)
+            self.x_ctx_padded = restore_by_mask(x_ctx_tiled, self.x_mask, dim=-1)
+            self.y_ctx_padded = restore_by_mask(y_ctx_tiled, self.y_mask, dim=-1)
+        else:
+            self.x_ctx_padded = None
+            self.y_ctx_padded = None
+
+
+        # Pre-compute max hypervolume for regret calculation over *both context and candidate points*
         # [B]
+        y_pool = self._y
+        if y_ctx_tiled is not None:
+            y_ctx_for_pool = (
+                y_ctx_tiled
+                if restore_full_dim_later
+                else restore_by_mask(y_ctx_tiled, self.y_mask, dim=-1)
+            )
+            y_pool = torch.cat([y_pool, y_ctx_for_pool.to(y_pool)], dim=1)
+
         self.max_hv, _, _ = MOO.compute_hv(
-            solutions=self._y,
-            minimum=torch.min(self._y, dim=1).values,
-            maximum=torch.max(self._y, dim=1).values,
+            solutions=y_pool,
+            minimum=torch.min(y_pool, dim=1).values,
+            maximum=torch.max(y_pool, dim=1).values,
             y_mask=None if restore_full_dim_later else self.y_mask,
             normalize=False,
         )
         self.max_hv_norm, _, _ = MOO.compute_hv(
-            solutions=self._y,
-            minimum=torch.min(self._y, dim=1).values,
-            maximum=torch.max(self._y, dim=1).values,
+            solutions=y_pool,
+            minimum=torch.min(y_pool, dim=1).values,
+            maximum=torch.max(y_pool, dim=1).values,
             y_mask=None if restore_full_dim_later else self.y_mask,
             normalize=True,
         )
 
         # Pre-compute min and max for each objective
-        y_mins_ = torch.min(self._y, dim=1).values  # [B, dim]
-        y_maxs_ = torch.max(self._y, dim=1).values
+        y_mins_ = torch.min(y_pool, dim=1).values  # [B, dim]
+        y_maxs_ = torch.max(y_pool, dim=1).values
 
         # [B, max_y_dim], [B, max_x_dim]
         self.y_mins = restore_by_mask(data=y_mins_, mask=self.y_mask, dim=-1)
@@ -338,6 +571,141 @@ class GPSampleFunction:
                 transform_method="min_max",
             )
         return x, y, chunks, chunk_mask
+
+    @staticmethod
+    def sample_from_post(
+        x_ctx: Tensor,
+        y_ctx: Tensor,
+        num_test_points: int,
+        num_fns: int,
+        num_gps: int,
+        kernel_types: List[str],
+        x_range,
+        use_grid_sampling: bool = False,
+        device: str = "cuda",
+        seed: int = 0,
+        use_independent_sampler: bool = False,
+        optimize_hyperparams: bool = False,
+        nuts_warmup: int = 128,
+        lengthscale_range: List = L_RANGE,
+        std_range: List = STD_RANGE,
+        p_iso: float = P_ISO,
+        jitter: float = JITTER,
+        max_tries: int = MAX_TRIES,
+        sample_kernel_weights: Optional[List] = None,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Sample functions from a GP posterior conditioned on (x_ctx, y_ctx).
+
+        x_ctx: [B, N, dx], y_ctx: [B, N, dy].
+
+        Sampling methods:
+            * Default (fully-Bayesian, NUTS): per (b, task), run NUTS to draw
+              num_gps*num_fns kernel hyperparameter samples from
+              p(theta | x_ctx[b], y_ctx[b, :, t]); for each theta, condition on
+              the data and draw one function value at x_test. Diversity comes
+              from theta variability, not just predictive noise.
+            * `use_independent_sampler=True`: per-task ExactGPs with
+              hyperparams sampled from priors, conditioned on (x_ctx[b],
+              y_ctx[b]). If `optimize_hyperparams=True`, MLE-optimizes the
+              sampled hyperparams via a SumMarginalLogLikelihood across tasks
+              before drawing.
+
+        Returns:
+            x, y of shape [num_gps*num_fns*B, num_test_points, *].
+            chunks, chunk_mask.
+            x_ctx_tiled, y_ctx_tiled of shape [num_gps*num_fns*B, N, *],
+                aligned with the batch order of x / y so callers can pair each
+                synthetic function with the real observations its GP was fit on.
+        """
+        B_outer = x_ctx.shape[0]
+        dx, dy = x_ctx.shape[-1], y_ctx.shape[-1]
+        n_ctx = x_ctx.shape[-2]
+
+        # Sample test points
+        x_range_t = make_range_tensor(range_list=x_range, num_dim=dx).to(device=device)
+        x_test = generate_sobol_samples(
+            x_range=x_range_t,
+            num_datapoints=num_test_points,
+            grid=use_grid_sampling,
+            seed=seed,
+        )
+        out_dtype = x_test.dtype
+
+        num_draws = num_gps * num_fns
+        weights = (
+            sample_kernel_weights
+            if sample_kernel_weights is not None
+            else [1] * len(kernel_types)
+        )
+
+        if use_independent_sampler:
+            # Per-task ExactGP path. Each (b, draw) call resamples hyperparams
+            # (used as init when optimize_hyperparams=True) and conditions on
+            # x_ctx[b], y_ctx[b], producing one joint draw at x_test.
+            ys = []
+            for b in range(B_outer):
+                for _ in range(num_draws):
+                    while True:
+                        try:
+                            _, y_bi = multi_output_gp_posterior_sampler(
+                                x_ctx=x_ctx[b],
+                                y_ctx=y_ctx[b],
+                                x_range=x_range,
+                                num_datapoints=num_test_points,
+                                data_kernel_type_list=kernel_types,
+                                sample_kernel_weights=weights,
+                                lengthscale_range=lengthscale_range,
+                                std_range=std_range,
+                                p_iso=p_iso,
+                                grid=use_grid_sampling,
+                                device=device,
+                                x=x_test,
+                                jitter=jitter,
+                                max_tries=max_tries,
+                                optimize_hyperparams=optimize_hyperparams,
+                            )
+                        except Exception:
+                            print("Exception when sampling from posterior.")
+                            continue
+                        if (
+                            y_bi is not None
+                            and not torch.isnan(y_bi).any()
+                            and not torch.isinf(y_bi).any()
+                        ):
+                            break
+                    ys.append(y_bi)
+            # Order is (b, draw) to match downstream reshape.
+            y = torch.stack(ys, dim=0).to(out_dtype)
+        else:
+            # Default: fully-Bayesian path, vectorized over (b, task)
+            y_full = multi_output_gp_posterior_sampler_nuts(
+                x_ctx=x_ctx,
+                y_ctx=y_ctx,
+                x_test=x_test,
+                num_draws=num_draws,
+                kernel_types=kernel_types,
+                sample_kernel_weights=weights,
+                std_range=std_range,
+                nuts_warmup=nuts_warmup,
+                jitter=jitter,
+                max_tries=max_tries,
+                device=device,
+            )  # [B_outer, num_draws, T, dy]
+            # Flatten (b, draw) -> (B_outer * num_draws) to match downstream order.
+            y = y_full.reshape(-1, num_test_points, dy).to(out_dtype)
+
+        x = x_test.unsqueeze(0).expand(y.shape[0], -1, -1)
+
+        chunks = x_test.clone()
+        chunk_mask = torch.ones(dx, device=x_test.device, dtype=torch.bool).unsqueeze(0)
+
+        # Tile real observations to match y's batch order: y[i] comes from gp
+        # (b, g) sample f with i = (b*num_gps + g)*num_fns + f, so each x_ctx[b]
+        # must appear num_gps*num_fns times consecutively.
+        x_ctx_tiled = x_ctx.repeat_interleave(num_gps * num_fns, dim=0)
+        y_ctx_tiled = y_ctx.repeat_interleave(num_gps * num_fns, dim=0)
+
+        return x, y, chunks, chunk_mask, x_ctx_tiled, y_ctx_tiled
 
     @staticmethod
     def repeat_along_batch(tensor: Tensor, num_repeat: int):
